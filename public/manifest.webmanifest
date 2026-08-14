@@ -1,0 +1,19 @@
+{
+  "name": "ONYX AI社員",
+  "short_name": "ONYX",
+  "description": "営業・マーケティング・事務の稼働状況を、スマホだけで確認する。",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#08080A",
+  "theme_color": "#08080A",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
