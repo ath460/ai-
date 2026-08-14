@@ -121,6 +121,22 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id, created_at DESC);
 
+-- 店舗の写真ライブラリ。
+-- Instagram は画像なしで投稿できず、しかも Meta 側が取りに行くため
+-- 「公開された https URL」でなければならない。AI社員が画像を捏造できないので、
+-- 使える写真をここに登録しておき、その中から選ばせる。
+CREATE TABLE IF NOT EXISTS media_assets (
+  id          TEXT PRIMARY KEY,
+  tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  url         TEXT NOT NULL,
+  -- AI社員が「どれを使うか」を選ぶための説明。人間向けではなくモデル向けに書く。
+  description TEXT NOT NULL,
+  tags        TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_tenant ON media_assets(tenant_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_url ON media_assets(tenant_id, url);
+
 CREATE TABLE IF NOT EXISTS connector_accounts (
   id               TEXT PRIMARY KEY,
   tenant_id        TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,

@@ -1,5 +1,6 @@
 import { closeDb } from "../src/lib/db/client.ts";
 import {
+  addMediaAsset,
   createJob,
   createStaff,
   createTenant,
@@ -126,9 +127,14 @@ createJob({
   cron: "0 9 * * *",
   instruction: [
     "本日分の SNS 投稿を用意してください。",
-    "申し送りから季節のメニューや仕込みの情報を引き、Instagram 向けに1本、X 向けに1本、",
-    "それぞれ draft_social_post で下書きしてください。同じ文面の使い回しはしないこと。",
+    "手順:",
+    "1. search_notes で季節のメニューや仕込みの情報を引く。",
+    "2. list_media で使える写真を確認する。Instagram は画像が必須で、",
+    "   ここに載っているURL以外は使えません。",
+    "3. 写真の内容と本文が噛み合う組み合わせを選び、Instagram 向けに1本、X 向けに1本、",
+    "   draft_social_post で下書きする。同じ文面の使い回しはしないこと。",
     "ハッシュタグは5個まで。1投稿1メッセージに絞ってください。",
+    "使える写真が1枚も無い場合、Instagram の投稿は作らず log_task に blocked で残してください。",
   ].join("\n"),
 });
 
@@ -235,6 +241,48 @@ for (const note of notes) {
   upsertNote({ tenantId: tenant.id, key: note.key, body: note.body });
 }
 console.log(`申し送りを${notes.length}件登録しました。`);
+
+// ------------------------------------------------------------ 写真ライブラリ
+
+/**
+ * デモ用の写真。
+ *
+ * URL はプレースホルダ画像サービスを指している。承認画面での見え方を確認するためのもので、
+ * 実運用では店舗の実写真に差し替えること。
+ * Instagram は Meta 側が画像を取得しに行くため、公開された https URL でなければならない。
+ */
+const mediaAssets: Array<{ url: string; description: string; tags: string[] }> = [
+  {
+    url: "https://picsum.photos/seed/kaede-charcoal/1080/1080",
+    description: "【差し替え用ダミー】炭火で焼いている大山鶏のもも肉。煙と炎が写っている縦構図。",
+    tags: ["炭火", "鶏", "看板メニュー", "通年"],
+  },
+  {
+    url: "https://picsum.photos/seed/kaede-sashimi/1080/1080",
+    description: "【差し替え用ダミー】本日の鮮魚のお造り盛り合わせ。5種、大皿、俯瞰。",
+    tags: ["刺身", "鮮魚", "通年"],
+  },
+  {
+    url: "https://picsum.photos/seed/kaede-sanma/1080/1080",
+    description: "【差し替え用ダミー】秋刀魚の炭火焼き。すだちを添えた状態。秋限定メニュー。",
+    tags: ["秋", "季節限定", "秋刀魚"],
+  },
+  {
+    url: "https://picsum.photos/seed/kaede-room/1080/1080",
+    description: "【差し替え用ダミー】個室A（6〜12名）の内観。座敷、間接照明。",
+    tags: ["店内", "個室", "宴会"],
+  },
+  {
+    url: "https://picsum.photos/seed/kaede-prep/1080/1080",
+    description: "【差し替え用ダミー】16時からの仕込み風景。厨房、手元のみ。",
+    tags: ["仕込み", "日常", "厨房"],
+  },
+];
+
+for (const asset of mediaAssets) {
+  addMediaAsset({ tenantId: tenant.id, ...asset });
+}
+console.log(`写真を${mediaAssets.length}件登録しました（すべてダミー画像。実写真に差し替えてください）。`);
 
 // --------------------------------------------------------- コネクタ（未接続）
 

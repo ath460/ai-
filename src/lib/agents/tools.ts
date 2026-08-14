@@ -3,10 +3,14 @@ import type { ConnectorBundle } from "../connectors/types.ts";
 import {
   createApproval,
   createTask,
+  listMediaAssets,
+  mediaUrlsAreRegistered,
   recordMetric,
+  searchMediaAssets,
   searchNotes,
   upsertNote,
 } from "../db/repo.ts";
+import { CAPTION_MAX_LENGTH, CAROUSEL_MAX_ITEMS } from "../connectors/instagram.ts";
 import type { Approval, ExternalAction, RiskLevel, Staff, Task, Tenant } from "../types.ts";
 import { executeAndRecord } from "./dispatch.ts";
 
@@ -246,6 +250,34 @@ export function buildTools(ctx: AgentRunContext) {
     },
   });
 
+  const listMedia = betaTool({
+    name: "list_media",
+    description:
+      "店舗に登録済みの写真を一覧・検索する。Instagram の投稿には画像が必須で、ここに載っている写真しか使えない。URLを自分で考えて書いてはいけない。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "説明やタグに対する部分一致。省略すると新しい順に一覧を返す。",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    run: async ({ query }) => {
+      const assets = query ? searchMediaAssets(ctx.tenant.id, query) : listMediaAssets(ctx.tenant.id);
+      if (assets.length === 0) {
+        return query
+          ? `「${query}」に一致する写真はありません。query を省略して一覧を確認してください。`
+          : "登録済みの写真がありません。画像が必要な投稿は作れないため、log_task に blocked で残してください。";
+      }
+      return assets
+        .map((a) => `- url: ${a.url}\n  説明: ${a.description}${a.tags.length ? `\n  タグ: ${a.tags.join(", ")}` : ""}`)
+        .join("\n");
+    },
+  });
+
   // ------------------------------------------- 外部発信ツール（承認キュー行き）
 
   const draftEmail = betaTool({
@@ -320,7 +352,8 @@ export function buildTools(ctx: AgentRunContext) {
 
   const draftSocialPost = betaTool({
     name: "draft_social_post",
-    description: "SNS 投稿の下書きを承認キューに積む。承認されるまで投稿されない。",
+    description:
+      "SNS 投稿の下書きを承認キューに積む。承認されるまで投稿されない。Instagram は画像が必須で、list_media に載っているURLしか使えない。",
     inputSchema: {
       type: "object",
       properties: {
@@ -333,18 +366,43 @@ export function buildTools(ctx: AgentRunContext) {
         mediaUrls: {
           type: "array",
           items: { type: "string" },
-          description: "添付画像のURL。",
+          description:
+            "添付画像のURL。list_media が返したものをそのまま使う。Instagram では1〜10枚必須。",
         },
-        scheduledForIso: { type: "string", description: "予約投稿したい日時（ISO 8601）。" },
+        scheduledForIso: {
+          type: "string",
+          description:
+            "掲載したい日時（ISO 8601）。Instagram には予約投稿の仕組みが無いため、承認された時点で公開される。",
+        },
       },
       required: ["platform", "body"],
       additionalProperties: false,
     },
     run: async ({ platform, body, mediaUrls, scheduledForIso }) => {
+      const media = mediaUrls ?? [];
+
+      // Instagram だけは Meta 側の制約が厳しく、下書きの時点で弾かないと
+      // 承認ボタンを押した瞬間に失敗する。店長の1タップを無駄にしない。
+      if (platform === "instagram") {
+        if (media.length === 0) {
+          return "Instagram はテキストのみの投稿ができません。先に list_media で写真を確認し、使うURLを mediaUrls に入れてください。使える写真が無ければ、この投稿は作らず log_task に blocked で残してください。";
+        }
+        if (media.length > CAROUSEL_MAX_ITEMS) {
+          return `Instagram のカルーセルは最大${CAROUSEL_MAX_ITEMS}枚です。${media.length}枚は多すぎます。`;
+        }
+        if (!mediaUrlsAreRegistered(ctx.tenant.id, media)) {
+          return "登録されていない画像URLが含まれています。URLは自分で組み立てず、list_media が返したものをそのまま使ってください。";
+        }
+        if (body.length > CAPTION_MAX_LENGTH) {
+          return `Instagram のキャプションは${CAPTION_MAX_LENGTH}文字までです（現在 ${body.length}文字）。短くしてください。`;
+        }
+      }
+
+      const mediaNote = media.length > 0 ? `\n画像: ${media.length}枚` : "";
       return enqueueExternal(ctx, {
         action: "post_social",
-        preview: `[${platform}]\n${body}`,
-        payload: { platform, body, mediaUrls: mediaUrls ?? [], scheduledFor: scheduledForIso },
+        preview: `[${platform}]\n${body}${mediaNote}`,
+        payload: { platform, body, mediaUrls: media, scheduledFor: scheduledForIso },
         risk: "medium",
         taskTitle: `${platform} 投稿の下書き`,
       });
@@ -393,6 +451,7 @@ export function buildTools(ctx: AgentRunContext) {
     saveNote,
     recordMetricTool,
     logTask,
+    listMedia,
     draftEmail,
     draftCalendarEvent,
     draftSocialPost,

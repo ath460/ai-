@@ -63,6 +63,11 @@ export function ApprovalCard({
   const rest = lines.slice(2).join("\n");
   const hasMore = rest.trim().length > 0;
 
+  // SNS 投稿は文面だけ見ても判断できない。実際に出る画像を並べる。
+  const mediaUrls = Array.isArray(approval.payload.mediaUrls)
+    ? (approval.payload.mediaUrls as unknown[]).filter((u): u is string => typeof u === "string")
+    : [];
+
   return (
     <article className="rounded-lg border border-[color:var(--color-edge)] bg-[color:var(--color-stone)] p-4">
       <div className="flex items-center gap-2">
@@ -90,6 +95,26 @@ export function ApprovalCard({
         >
           {expanded ? "たたむ" : "全文を見る →"}
         </button>
+      ) : null}
+
+      {mediaUrls.length > 0 ? (
+        <ul
+          className={`mt-3 grid gap-1.5 ${mediaUrls.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}
+        >
+          {mediaUrls.map((url, i) => (
+            <li key={url} className="overflow-hidden rounded border border-[color:var(--color-edge)]">
+              {/* 外部の画像URLをそのまま出す。next/image を使うと remotePatterns の
+                  設定が要り、店舗ごとに配信元が変わる運用に合わない。 */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={url}
+                alt={`投稿画像 ${i + 1}`}
+                loading="lazy"
+                className="aspect-square w-full bg-[color:var(--color-stone-2)] object-cover"
+              />
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {rejecting ? (

@@ -135,10 +135,12 @@ export function createMockSocialConnector(): SocialConnector {
   return {
     kind: "social",
     live: false,
+    livePlatforms: [],
     async post(input): Promise<DispatchResult> {
+      const media = input.mediaUrls?.length ? `・画像${input.mediaUrls.length}枚` : "";
       return {
         ok: true,
-        summary: `[モック] ${input.platform} への投稿を記録しました（${input.body.length}文字）。実投稿はされていません。`,
+        summary: `[モック] ${input.platform} への投稿を記録しました（${input.body.length}文字${media}）。実投稿はされていません。`,
         externalId: `mock-post-${Date.now()}`,
       };
     },

@@ -44,11 +44,20 @@ export interface CreateEventInput {
   description?: string;
 }
 
+export type SocialPlatform = "x" | "instagram" | "google_business";
+
 export interface SocialPostInput {
-  platform: "x" | "instagram" | "google_business";
+  platform: SocialPlatform;
   body: string;
-  /** 画像URL。ONYX の「写真の加工」フローから渡ってくる想定。 */
+  /**
+   * 画像URL。media_assets に登録済みの公開URLのみ。
+   * Instagram は Meta 側が取得しに行くため、到達可能な https URL でなければならない。
+   */
   mediaUrls?: string[];
+  /**
+   * 掲載したい日時。Instagram の Content Publishing API に予約投稿は無いため、
+   * Instagram では承認された時点で公開される（この値は記録と表示にのみ使う）。
+   */
   scheduledFor?: string;
 }
 
@@ -82,7 +91,10 @@ export interface CalendarConnector {
 
 export interface SocialConnector {
   readonly kind: "social";
+  /** いずれか1つでも実接続なら true。 */
   readonly live: boolean;
+  /** 実接続になっているプラットフォーム。UI の接続状況表示に使う。 */
+  readonly livePlatforms: SocialPlatform[];
   post(input: SocialPostInput): Promise<DispatchResult>;
 }
 

@@ -7,6 +7,7 @@ import type {
   ConnectorProvider,
   ExternalAction,
   Job,
+  MediaAsset,
   Metric,
   Note,
   RiskLevel,
@@ -699,6 +700,72 @@ export function listAudit(tenantId: string, limit = 100): AuditLog[] {
     detail: strOrNull(r.detail),
     createdAt: str(r.created_at),
   }));
+}
+
+// ----------------------------------------------------------- media assets
+
+function toMediaAsset(r: Row): MediaAsset {
+  const raw = str(r.tags);
+  return {
+    id: str(r.id),
+    tenantId: str(r.tenant_id),
+    url: str(r.url),
+    description: str(r.description),
+    tags: raw.length > 0 ? raw.split(",").map((t) => t.trim()).filter(Boolean) : [],
+    createdAt: str(r.created_at),
+  };
+}
+
+export function addMediaAsset(input: {
+  tenantId: string;
+  url: string;
+  description: string;
+  tags?: string[];
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO media_assets (id, tenant_id, url, description, tags, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(tenant_id, url)
+       DO UPDATE SET description = excluded.description, tags = excluded.tags`,
+    )
+    .run(
+      newId("med"),
+      input.tenantId,
+      input.url,
+      input.description,
+      (input.tags ?? []).join(","),
+      nowIso(),
+    );
+}
+
+export function listMediaAssets(tenantId: string, limit = 50): MediaAsset[] {
+  return (
+    getDb()
+      .prepare(`SELECT * FROM media_assets WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`)
+      .all(tenantId, limit) as Row[]
+  ).map(toMediaAsset);
+}
+
+/** AI社員が「秋の写真」のように探すためのゆるい検索。 */
+export function searchMediaAssets(tenantId: string, query: string, limit = 20): MediaAsset[] {
+  const like = `%${query}%`;
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM media_assets
+          WHERE tenant_id = ? AND (description LIKE ? OR tags LIKE ?)
+          ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(tenantId, like, like, limit) as Row[]
+  ).map(toMediaAsset);
+}
+
+/** 下書きに載った画像URLが、本当に登録済みのものかを確かめる。 */
+export function mediaUrlsAreRegistered(tenantId: string, urls: string[]): boolean {
+  if (urls.length === 0) return false;
+  const known = new Set(listMediaAssets(tenantId, 500).map((m) => m.url));
+  return urls.every((u) => known.has(u));
 }
 
 // ------------------------------------------------------- connector accounts

@@ -168,7 +168,26 @@ export interface AuditLog {
   createdAt: string;
 }
 
-export type ConnectorProvider = "gmail" | "google_calendar" | "social" | "listing";
+/**
+ * 店舗の写真。
+ * Instagram は画像必須かつ Meta が取得できる公開URLしか受け付けないため、
+ * AI社員はここに登録済みのものからしか選べない。
+ */
+export interface MediaAsset {
+  id: string;
+  tenantId: string;
+  url: string;
+  description: string;
+  tags: string[];
+  createdAt: string;
+}
+
+export type ConnectorProvider =
+  | "gmail"
+  | "google_calendar"
+  | "instagram"
+  | "social"
+  | "listing";
 
 export interface ConnectorAccount {
   id: string;
