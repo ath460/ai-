@@ -17,14 +17,14 @@ import {
  * 既にテナントがある場合は何もしない（誤って本番データを増やさないため）。
  */
 
-if (listTenants().length > 0) {
+if ((await listTenants()).length > 0) {
   console.log("テナントが既に存在するためスキップしました。");
   console.log("入れ直す場合は data/onyx.sqlite を削除してから再実行してください。");
-  closeDb();
+  await closeDb();
   process.exit(0);
 }
 
-const tenant = createTenant({
+const tenant = await createTenant({
   name: "炭火焼き 楓（大阪・北新地）",
   industry: "居酒屋・ダイニング",
   timezone: "Asia/Tokyo",
@@ -52,7 +52,7 @@ console.log(`店舗を作成しました: ${tenant.name}`);
 
 // ---------------------------------------------------------------- AI社員
 
-const sales = createStaff({
+const sales = await createStaff({
   tenantId: tenant.id,
   role: "sales",
   name: "一次対応担当",
@@ -63,7 +63,7 @@ const sales = createStaff({
   ].join("\n"),
 });
 
-const marketing = createStaff({
+const marketing = await createStaff({
   tenantId: tenant.id,
   role: "marketing",
   name: "発信担当",
@@ -74,7 +74,7 @@ const marketing = createStaff({
   ].join("\n"),
 });
 
-const backoffice = createStaff({
+const backoffice = await createStaff({
   tenantId: tenant.id,
   role: "backoffice",
   name: "事務担当",
@@ -89,11 +89,14 @@ console.log("AI社員を3名作成しました。");
 
 // ------------------------------------------------------------------ ジョブ
 
-createJob({
+await createJob({
   tenantId: tenant.id,
   staffId: sales.id,
   name: "問い合わせの一次対応",
   cron: "*/30 * * * *",
+  // 30分ごとに動くので、費用の大半はこのジョブが占める。
+  // 新着メールが無い回はモデルを呼ばずに終える。
+  precheck: "new_inbox",
   instruction: [
     "受信箱を確認し、まだ返信していない問い合わせに一次返信の下書きを作ってください。",
     "手順:",
@@ -107,7 +110,7 @@ createJob({
   ].join("\n"),
 });
 
-createJob({
+await createJob({
   tenantId: tenant.id,
   staffId: sales.id,
   name: "翌日の商談・予約の下準備",
@@ -120,7 +123,7 @@ createJob({
   ].join("\n"),
 });
 
-createJob({
+await createJob({
   tenantId: tenant.id,
   staffId: marketing.id,
   name: "朝のSNS投稿づくり",
@@ -138,7 +141,7 @@ createJob({
   ].join("\n"),
 });
 
-createJob({
+await createJob({
   tenantId: tenant.id,
   staffId: marketing.id,
   name: "夜の告知と翌日の仕込み",
@@ -150,7 +153,7 @@ createJob({
   ].join("\n"),
 });
 
-createJob({
+await createJob({
   tenantId: tenant.id,
   staffId: backoffice.id,
   name: "掲載情報の点検",
@@ -163,7 +166,7 @@ createJob({
   ].join("\n"),
 });
 
-createJob({
+await createJob({
   tenantId: tenant.id,
   staffId: backoffice.id,
   name: "日次の集計と日報",
@@ -238,7 +241,7 @@ const notes: Array<{ key: string; body: string }> = [
 ];
 
 for (const note of notes) {
-  upsertNote({ tenantId: tenant.id, key: note.key, body: note.body });
+  await upsertNote({ tenantId: tenant.id, key: note.key, body: note.body });
 }
 console.log(`申し送りを${notes.length}件登録しました。`);
 
@@ -280,19 +283,19 @@ const mediaAssets: Array<{ url: string; description: string; tags: string[] }> =
 ];
 
 for (const asset of mediaAssets) {
-  addMediaAsset({ tenantId: tenant.id, ...asset });
+  await addMediaAsset({ tenantId: tenant.id, ...asset });
 }
 console.log(`写真を${mediaAssets.length}件登録しました（すべてダミー画像。実写真に差し替えてください）。`);
 
 // --------------------------------------------------------- コネクタ（未接続）
 
-upsertConnectorAccount({
+await upsertConnectorAccount({
   tenantId: tenant.id,
   provider: "gmail",
   accountRef: "info@kaede-dojima.example.jp",
   status: "mock",
 });
-upsertConnectorAccount({
+await upsertConnectorAccount({
   tenantId: tenant.id,
   provider: "google_calendar",
   accountRef: "primary",
@@ -307,4 +310,4 @@ console.log("  3. npm run worker         — 24時間の自動稼働を開始す
 console.log("");
 console.log(`ONYX_TENANT_ID=${tenant.id}`);
 
-closeDb();
+await closeDb();

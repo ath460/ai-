@@ -1,6 +1,7 @@
 import { SetupNotice } from "@/components/SetupNotice";
 import { Card, EmptyState, PageHeader, RoleBadge, SectionTitle } from "@/components/ui";
 import {
+  countSkippedRuns,
   getDefaultTenant,
   listMetrics,
   listRuns,
@@ -22,17 +23,21 @@ export const dynamic = "force-dynamic";
 /** 1件あたりの想定所要時間（分）。サイトの試算（掲載更新45分/投稿40分など）に合わせた保守値。 */
 const MINUTES_PER_TASK = 12;
 
-export default function ReportPage() {
-  const tenant = getDefaultTenant();
+export default async function ReportPage() {
+  const tenant = await getDefaultTenant();
   if (!tenant) return <SetupNotice />;
 
   const today = todayDateString(tenant.timezone);
   const since = startOfTodayIso(tenant.timezone);
 
-  const staff = listStaff(tenant.id);
-  const tasks = listTasks(tenant.id, { since, limit: 300 });
-  const runs = listRuns(tenant.id, 100).filter((r) => r.startedAt >= since);
-  const metrics = listMetrics(tenant.id, daysAgoDateString(tenant.timezone, 7));
+  const [staff, tasks, allRuns, metrics, skippedCount] = await Promise.all([
+    listStaff(tenant.id),
+    listTasks(tenant.id, { since, limit: 300 }),
+    listRuns(tenant.id, 200),
+    listMetrics(tenant.id, daysAgoDateString(tenant.timezone, 7)),
+    countSkippedRuns(tenant.id, since),
+  ]);
+  const runs = allRuns.filter((r) => r.startedAt >= since);
 
   const done = tasks.filter((t) => t.status === "done");
   const blocked = tasks.filter((t) => t.status === "blocked");
@@ -171,7 +176,11 @@ export default function ReportPage() {
           ※ 削減時間は「片付いた件数 × {MINUTES_PER_TASK}分」で算出した推定値です。人が同じ作業を
           した場合の目安であり、実測値ではありません。
           <br />
-          本日のモデル利用: {tokens.toLocaleString()} トークン / 実行 {runs.length} 回。
+          本日のモデル利用: {tokens.toLocaleString()} トークン / 実行 {runs.length} 回
+          {skippedCount > 0
+            ? `（ほかに ${skippedCount} 回は、やることが無いと判定して起動せず、費用が出ていません）`
+            : ""}
+          。
         </p>
       </section>
     </main>

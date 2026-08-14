@@ -9,15 +9,17 @@ export const dynamic = "force-dynamic";
 /** 稼働ログ1件の詳細。何を根拠にAI社員がそう動いたかまで辿れるようにする。 */
 export default async function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const tenant = getDefaultTenant();
+  const tenant = await getDefaultTenant();
   if (!tenant) notFound();
 
-  const task = getTask(tenant.id, id);
+  const task = await getTask(tenant.id, id);
   if (!task) notFound();
 
-  const staff = getStaff(tenant.id, task.staffId);
-  const run = getRun(tenant.id, task.runId);
-  const approval = task.approvalId ? getApproval(tenant.id, task.approvalId) : null;
+  const [staff, run, approval] = await Promise.all([
+    getStaff(tenant.id, task.staffId),
+    getRun(tenant.id, task.runId),
+    task.approvalId ? getApproval(tenant.id, task.approvalId) : Promise.resolve(null),
+  ]);
 
   return (
     <main>

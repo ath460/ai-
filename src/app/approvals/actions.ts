@@ -24,10 +24,10 @@ function currentActor(): string {
 
 export async function approveAction(formData: FormData): Promise<void> {
   const approvalId = String(formData.get("approvalId") ?? "");
-  const tenant = getDefaultTenant();
+  const tenant = await getDefaultTenant();
   if (!tenant || !approvalId) return;
 
-  const claimed = decideApproval({
+  const claimed = await decideApproval({
     tenantId: tenant.id,
     approvalId,
     decision: "approved",
@@ -35,13 +35,13 @@ export async function approveAction(formData: FormData): Promise<void> {
   });
   if (!claimed) return;
 
-  const approval = getApproval(tenant.id, approvalId);
+  const approval = await getApproval(tenant.id, approvalId);
   if (!approval) return;
 
   const result = await executeAndRecord(approval);
-  setTaskStatusByApproval(tenant.id, approvalId, result.ok ? "done" : "blocked", result.summary);
+  await setTaskStatusByApproval(tenant.id, approvalId, result.ok ? "done" : "blocked", result.summary);
 
-  writeAudit({
+  await writeAudit({
     tenantId: tenant.id,
     actor: currentActor(),
     action: "approval.approved",
@@ -56,10 +56,10 @@ export async function approveAction(formData: FormData): Promise<void> {
 export async function rejectAction(formData: FormData): Promise<void> {
   const approvalId = String(formData.get("approvalId") ?? "");
   const reason = String(formData.get("reason") ?? "").trim();
-  const tenant = getDefaultTenant();
+  const tenant = await getDefaultTenant();
   if (!tenant || !approvalId) return;
 
-  const claimed = decideApproval({
+  const claimed = await decideApproval({
     tenantId: tenant.id,
     approvalId,
     decision: "rejected",
@@ -69,14 +69,14 @@ export async function rejectAction(formData: FormData): Promise<void> {
   });
   if (!claimed) return;
 
-  setTaskStatusByApproval(
+  await setTaskStatusByApproval(
     tenant.id,
     approvalId,
     "blocked",
     reason ? `却下: ${reason}` : "却下されました。",
   );
 
-  writeAudit({
+  await writeAudit({
     tenantId: tenant.id,
     actor: currentActor(),
     action: "approval.rejected",

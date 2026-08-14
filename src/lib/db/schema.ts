@@ -1,11 +1,18 @@
+import type { Dialect } from "./driver.ts";
+
 /**
  * スキーマ定義。CREATE TABLE IF NOT EXISTS のみで構成し、
  * 起動時に毎回流しても安全（= マイグレーション兼初期化）。
  *
  * 全テーブルが tenant_id を持つ。クライアント提供時に店舗ごとの
  * データが混ざらないよう、repo 層の全クエリで tenant_id を必須にしている。
+ *
+ * SQLite と Postgres の差はごく少ない。浮動小数の型名だけ分岐する。
  */
-export const SCHEMA_SQL = `
+export function schemaSql(dialect: Dialect): string {
+  const REAL = dialect === "postgres" ? "DOUBLE PRECISION" : "REAL";
+
+  return `
 CREATE TABLE IF NOT EXISTS tenants (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
@@ -33,6 +40,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   name        TEXT NOT NULL,
   cron        TEXT NOT NULL,
   instruction TEXT NOT NULL,
+  -- モデルを呼ぶ前の足切り条件。'always' は毎回起動、
+  -- 'new_inbox' は前回実行以降に新着メールが無ければ起動しない。
+  precheck    TEXT NOT NULL DEFAULT 'always',
   enabled     INTEGER NOT NULL DEFAULT 1,
   last_run_at TEXT
 );
@@ -44,7 +54,9 @@ CREATE TABLE IF NOT EXISTS runs (
   job_id        TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   staff_id      TEXT NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
   slot_key      TEXT NOT NULL,
-  status        TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
+  -- skipped は「事前チェックで足切りしてモデルを呼ばなかった」状態。
+  -- 失敗ではないので failed と分けている。
+  status        TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed','skipped')),
   started_at    TEXT NOT NULL,
   finished_at   TEXT,
   summary       TEXT,
@@ -55,6 +67,7 @@ CREATE TABLE IF NOT EXISTS runs (
 -- 冪等性の要。同じスロットのジョブは何度叩かれても1回しか走らない。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_slot ON runs(slot_key);
 CREATE INDEX IF NOT EXISTS idx_runs_tenant_started ON runs(tenant_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS tasks (
   id         TEXT PRIMARY KEY,
@@ -69,8 +82,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   approval_id TEXT,
   created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_approval ON tasks(approval_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_created ON tasks(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_approval ON tasks(approval_id);
 
 CREATE TABLE IF NOT EXISTS approvals (
   id               TEXT PRIMARY KEY,
@@ -105,7 +118,7 @@ CREATE TABLE IF NOT EXISTS metrics (
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   date      TEXT NOT NULL,
   key       TEXT NOT NULL,
-  value     REAL NOT NULL,
+  value     ${REAL} NOT NULL,
   unit      TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_unique ON metrics(tenant_id, date, key);
@@ -147,3 +160,4 @@ CREATE TABLE IF NOT EXISTS connector_accounts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_unique ON connector_accounts(tenant_id, provider);
 `;
+}

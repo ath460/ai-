@@ -53,7 +53,7 @@ async function enqueueExternal(
 ): Promise<string> {
   const autoApproved = (ctx.tenant.settings.autoApprove ?? []).includes(input.action);
 
-  const approval = createApproval({
+  const approval = await createApproval({
     tenantId: ctx.tenant.id,
     runId: ctx.runId,
     staffId: ctx.staff.id,
@@ -65,7 +65,7 @@ async function enqueueExternal(
   ctx.approvals.push(approval);
 
   if (!autoApproved) {
-    const task = createTask({
+    const task = await createTask({
       tenantId: ctx.tenant.id,
       runId: ctx.runId,
       staffId: ctx.staff.id,
@@ -79,7 +79,7 @@ async function enqueueExternal(
   }
 
   const result = await executeAndRecord(approval);
-  const task = createTask({
+  const task = await createTask({
     tenantId: ctx.tenant.id,
     runId: ctx.runId,
     staffId: ctx.staff.id,
@@ -173,7 +173,7 @@ export function buildTools(ctx: AgentRunContext) {
       additionalProperties: false,
     },
     run: async ({ query }) => {
-      const notes = searchNotes(ctx.tenant.id, query);
+      const notes = await searchNotes(ctx.tenant.id, query);
       if (notes.length === 0) return `「${query}」に一致する申し送りはありません。`;
       return notes.map((n) => `## ${n.key}\n${n.body}`).join("\n\n");
     },
@@ -193,7 +193,7 @@ export function buildTools(ctx: AgentRunContext) {
       additionalProperties: false,
     },
     run: async ({ key, body }) => {
-      upsertNote({ tenantId: ctx.tenant.id, staffId: ctx.staff.id, key, body });
+      await upsertNote({ tenantId: ctx.tenant.id, staffId: ctx.staff.id, key, body });
       return `申し送り「${key}」を保存しました。`;
     },
   });
@@ -213,7 +213,7 @@ export function buildTools(ctx: AgentRunContext) {
       additionalProperties: false,
     },
     run: async ({ date, key, value, unit }) => {
-      recordMetric({ tenantId: ctx.tenant.id, date, key, value, unit });
+      await recordMetric({ tenantId: ctx.tenant.id, date, key, value, unit });
       return `${date} の「${key}」を ${value}${unit ?? ""} として記録しました。`;
     },
   });
@@ -237,7 +237,7 @@ export function buildTools(ctx: AgentRunContext) {
       additionalProperties: false,
     },
     run: async ({ title, detail, status }) => {
-      const task = createTask({
+      const task = await createTask({
         tenantId: ctx.tenant.id,
         runId: ctx.runId,
         staffId: ctx.staff.id,
@@ -266,7 +266,9 @@ export function buildTools(ctx: AgentRunContext) {
       additionalProperties: false,
     },
     run: async ({ query }) => {
-      const assets = query ? searchMediaAssets(ctx.tenant.id, query) : listMediaAssets(ctx.tenant.id);
+      const assets = query
+        ? await searchMediaAssets(ctx.tenant.id, query)
+        : await listMediaAssets(ctx.tenant.id);
       if (assets.length === 0) {
         return query
           ? `「${query}」に一致する写真はありません。query を省略して一覧を確認してください。`
@@ -390,7 +392,7 @@ export function buildTools(ctx: AgentRunContext) {
         if (media.length > CAROUSEL_MAX_ITEMS) {
           return `Instagram のカルーセルは最大${CAROUSEL_MAX_ITEMS}枚です。${media.length}枚は多すぎます。`;
         }
-        if (!mediaUrlsAreRegistered(ctx.tenant.id, media)) {
+        if (!(await mediaUrlsAreRegistered(ctx.tenant.id, media))) {
           return "登録されていない画像URLが含まれています。URLは自分で組み立てず、list_media が返したものをそのまま使ってください。";
         }
         if (body.length > CAPTION_MAX_LENGTH) {

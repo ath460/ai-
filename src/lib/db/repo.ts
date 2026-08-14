@@ -7,6 +7,7 @@ import type {
   ConnectorProvider,
   ExternalAction,
   Job,
+  JobPrecheck,
   MediaAsset,
   Metric,
   Note,
@@ -23,6 +24,9 @@ import type {
 
 /**
  * リポジトリ層。SQL はすべてこのファイルに閉じる。
+ *
+ * SQL は `?` プレースホルダで書く。Postgres 用の $1, $2 への変換は
+ * ドライバ側が行うので、ここでは方言を意識しない。
  *
  * 設計上の約束: テナントを跨ぐデータが返る関数を作らない。
  * 一覧系は必ず tenantId を第一引数に取る。
@@ -43,6 +47,19 @@ const json = <T,>(v: unknown, fallback: T): T => {
   }
 };
 
+async function query(sql: string, params: unknown[] = []): Promise<Row[]> {
+  return (await getDb()).query<Row>(sql, params);
+}
+
+async function run(sql: string, params: unknown[] = []): Promise<number> {
+  const result = await (await getDb()).run(sql, params);
+  return result.changes;
+}
+
+async function first(sql: string, params: unknown[] = []): Promise<Row | undefined> {
+  return (await query(sql, params))[0];
+}
+
 // ---------------------------------------------------------------- tenants
 
 function toTenant(r: Row): Tenant {
@@ -56,12 +73,12 @@ function toTenant(r: Row): Tenant {
   };
 }
 
-export function createTenant(input: {
+export async function createTenant(input: {
   name: string;
   industry?: string;
   timezone?: string;
   settings?: TenantSettings;
-}): Tenant {
+}): Promise<Tenant> {
   const tenant: Tenant = {
     id: newId("tnt"),
     name: input.name,
@@ -70,28 +87,27 @@ export function createTenant(input: {
     settings: input.settings ?? {},
     createdAt: nowIso(),
   };
-  getDb()
-    .prepare(
-      `INSERT INTO tenants (id, name, industry, timezone, settings_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO tenants (id, name, industry, timezone, settings_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
       tenant.id,
       tenant.name,
       tenant.industry,
       tenant.timezone,
       JSON.stringify(tenant.settings),
       tenant.createdAt,
-    );
+    ],
+  );
   return tenant;
 }
 
-export function listTenants(): Tenant[] {
-  return (getDb().prepare(`SELECT * FROM tenants ORDER BY created_at`).all() as Row[]).map(toTenant);
+export async function listTenants(): Promise<Tenant[]> {
+  return (await query(`SELECT * FROM tenants ORDER BY created_at`)).map(toTenant);
 }
 
-export function getTenant(tenantId: string): Tenant | null {
-  const row = getDb().prepare(`SELECT * FROM tenants WHERE id = ?`).get(tenantId) as Row | undefined;
+export async function getTenant(tenantId: string): Promise<Tenant | null> {
+  const row = await first(`SELECT * FROM tenants WHERE id = ?`, [tenantId]);
   return row ? toTenant(row) : null;
 }
 
@@ -99,10 +115,10 @@ export function getTenant(tenantId: string): Tenant | null {
  * 既定テナント。ONYX 社内運用ではこれ1件しか使わない。
  * 環境変数 ONYX_TENANT_ID が指定されていればそれを優先する。
  */
-export function getDefaultTenant(): Tenant | null {
+export async function getDefaultTenant(): Promise<Tenant | null> {
   const pinned = process.env.ONYX_TENANT_ID;
   if (pinned) return getTenant(pinned);
-  return listTenants()[0] ?? null;
+  return (await listTenants())[0] ?? null;
 }
 
 // ------------------------------------------------------------------ staff
@@ -119,39 +135,42 @@ function toStaff(r: Row): Staff {
   };
 }
 
-export function createStaff(input: {
+export async function createStaff(input: {
   tenantId: string;
   role: StaffRole;
   name: string;
   persona: string;
-}): Staff {
+}): Promise<Staff> {
   const staff: Staff = { ...input, id: newId("stf"), enabled: true, createdAt: nowIso() };
-  getDb()
-    .prepare(
-      `INSERT INTO staff (id, tenant_id, role, name, persona, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`,
-    )
-    .run(staff.id, staff.tenantId, staff.role, staff.name, staff.persona, staff.createdAt);
+  await run(
+    `INSERT INTO staff (id, tenant_id, role, name, persona, enabled, created_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    [staff.id, staff.tenantId, staff.role, staff.name, staff.persona, staff.createdAt],
+  );
   return staff;
 }
 
-export function listStaff(tenantId: string): Staff[] {
-  return (
-    getDb().prepare(`SELECT * FROM staff WHERE tenant_id = ? ORDER BY created_at`).all(tenantId) as Row[]
-  ).map(toStaff);
+export async function listStaff(tenantId: string): Promise<Staff[]> {
+  return (await query(`SELECT * FROM staff WHERE tenant_id = ? ORDER BY created_at`, [tenantId])).map(
+    toStaff,
+  );
 }
 
-export function getStaff(tenantId: string, staffId: string): Staff | null {
-  const row = getDb()
-    .prepare(`SELECT * FROM staff WHERE tenant_id = ? AND id = ?`)
-    .get(tenantId, staffId) as Row | undefined;
+export async function getStaff(tenantId: string, staffId: string): Promise<Staff | null> {
+  const row = await first(`SELECT * FROM staff WHERE tenant_id = ? AND id = ?`, [tenantId, staffId]);
   return row ? toStaff(row) : null;
 }
 
-export function setStaffEnabled(tenantId: string, staffId: string, enabled: boolean): void {
-  getDb()
-    .prepare(`UPDATE staff SET enabled = ? WHERE tenant_id = ? AND id = ?`)
-    .run(enabled ? 1 : 0, tenantId, staffId);
+export async function setStaffEnabled(
+  tenantId: string,
+  staffId: string,
+  enabled: boolean,
+): Promise<void> {
+  await run(`UPDATE staff SET enabled = ? WHERE tenant_id = ? AND id = ?`, [
+    enabled ? 1 : 0,
+    tenantId,
+    staffId,
+  ]);
 }
 
 // ------------------------------------------------------------------- jobs
@@ -164,47 +183,52 @@ function toJob(r: Row): Job {
     name: str(r.name),
     cron: str(r.cron),
     instruction: str(r.instruction),
+    precheck: str(r.precheck) as JobPrecheck,
     enabled: bool(r.enabled),
     lastRunAt: strOrNull(r.last_run_at),
   };
 }
 
-export function createJob(input: {
+export async function createJob(input: {
   tenantId: string;
   staffId: string;
   name: string;
   cron: string;
   instruction: string;
-}): Job {
-  const job: Job = { ...input, id: newId("job"), enabled: true, lastRunAt: null };
-  getDb()
-    .prepare(
-      `INSERT INTO jobs (id, tenant_id, staff_id, name, cron, instruction, enabled, last_run_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, NULL)`,
-    )
-    .run(job.id, job.tenantId, job.staffId, job.name, job.cron, job.instruction);
+  precheck?: JobPrecheck;
+}): Promise<Job> {
+  const job: Job = {
+    ...input,
+    id: newId("job"),
+    precheck: input.precheck ?? "always",
+    enabled: true,
+    lastRunAt: null,
+  };
+  await run(
+    `INSERT INTO jobs (id, tenant_id, staff_id, name, cron, instruction, precheck, enabled, last_run_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL)`,
+    [job.id, job.tenantId, job.staffId, job.name, job.cron, job.instruction, job.precheck],
+  );
   return job;
 }
 
-export function listJobs(tenantId: string): Job[] {
-  return (getDb().prepare(`SELECT * FROM jobs WHERE tenant_id = ?`).all(tenantId) as Row[]).map(toJob);
+export async function listJobs(tenantId: string): Promise<Job[]> {
+  return (await query(`SELECT * FROM jobs WHERE tenant_id = ?`, [tenantId])).map(toJob);
 }
 
 /** スケジューラ用。全テナント分の有効ジョブを返す唯一の例外。 */
-export function listAllEnabledJobs(): Job[] {
+export async function listAllEnabledJobs(): Promise<Job[]> {
   return (
-    getDb()
-      .prepare(
-        `SELECT j.* FROM jobs j
-         JOIN staff s ON s.id = j.staff_id
-         WHERE j.enabled = 1 AND s.enabled = 1`,
-      )
-      .all() as Row[]
+    await query(
+      `SELECT j.* FROM jobs j
+       JOIN staff s ON s.id = j.staff_id
+       WHERE j.enabled = 1 AND s.enabled = 1`,
+    )
   ).map(toJob);
 }
 
-export function touchJobLastRun(jobId: string, at: string): void {
-  getDb().prepare(`UPDATE jobs SET last_run_at = ? WHERE id = ?`).run(at, jobId);
+export async function touchJobLastRun(jobId: string, at: string): Promise<void> {
+  await run(`UPDATE jobs SET last_run_at = ? WHERE id = ?`, [at, jobId]);
 }
 
 // ------------------------------------------------------------------- runs
@@ -232,54 +256,55 @@ function toRun(r: Row): Run {
  * ワーカーと Vercel Cron が同時に叩いても、UNIQUE 制約により
  * 片方だけが run を獲得する。二重にメールが下書きされる事故を防ぐ。
  */
-export function claimRunSlot(input: {
+export async function claimRunSlot(input: {
   tenantId: string;
   jobId: string;
   staffId: string;
   slotKey: string;
-}): Run | null {
-  const run: Run = {
-    id: newId("run"),
+}): Promise<Run | null> {
+  const startedAt = nowIso();
+  const id = newId("run");
+
+  const changes = await run(
+    `INSERT INTO runs
+       (id, tenant_id, job_id, staff_id, slot_key, status, started_at, input_tokens, output_tokens)
+     VALUES (?, ?, ?, ?, ?, 'running', ?, 0, 0)
+     ON CONFLICT DO NOTHING`,
+    [id, input.tenantId, input.jobId, input.staffId, input.slotKey, startedAt],
+  );
+
+  if (changes === 0) return null;
+
+  return {
+    id,
     tenantId: input.tenantId,
     jobId: input.jobId,
     staffId: input.staffId,
     slotKey: input.slotKey,
     status: "running",
-    startedAt: nowIso(),
+    startedAt,
     finishedAt: null,
     summary: null,
     error: null,
     inputTokens: 0,
     outputTokens: 0,
   };
-  const result = getDb()
-    .prepare(
-      `INSERT OR IGNORE INTO runs
-         (id, tenant_id, job_id, staff_id, slot_key, status, started_at, input_tokens, output_tokens)
-       VALUES (?, ?, ?, ?, ?, 'running', ?, 0, 0)`,
-    )
-    .run(run.id, run.tenantId, run.jobId, run.staffId, run.slotKey, run.startedAt);
-
-  if (Number(result.changes) === 0) return null;
-  return run;
 }
 
-export function finishRun(input: {
+export async function finishRun(input: {
   runId: string;
-  status: Extract<RunStatus, "succeeded" | "failed">;
+  status: Extract<RunStatus, "succeeded" | "failed" | "skipped">;
   summary?: string | null;
   error?: string | null;
   inputTokens?: number;
   outputTokens?: number;
-}): void {
-  getDb()
-    .prepare(
-      `UPDATE runs
-          SET status = ?, finished_at = ?, summary = ?, error = ?,
-              input_tokens = ?, output_tokens = ?
-        WHERE id = ?`,
-    )
-    .run(
+}): Promise<void> {
+  await run(
+    `UPDATE runs
+        SET status = ?, finished_at = ?, summary = ?, error = ?,
+            input_tokens = ?, output_tokens = ?
+      WHERE id = ?`,
+    [
       input.status,
       nowIso(),
       input.summary ?? null,
@@ -287,22 +312,48 @@ export function finishRun(input: {
       input.inputTokens ?? 0,
       input.outputTokens ?? 0,
       input.runId,
-    );
+    ],
+  );
 }
 
-export function listRuns(tenantId: string, limit = 50): Run[] {
+export async function listRuns(tenantId: string, limit = 50): Promise<Run[]> {
   return (
-    getDb()
-      .prepare(`SELECT * FROM runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT ?`)
-      .all(tenantId, limit) as Row[]
+    await query(`SELECT * FROM runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT ?`, [
+      tenantId,
+      limit,
+    ])
   ).map(toRun);
 }
 
-export function getRun(tenantId: string, runId: string): Run | null {
-  const row = getDb()
-    .prepare(`SELECT * FROM runs WHERE tenant_id = ? AND id = ?`)
-    .get(tenantId, runId) as Row | undefined;
+export async function getRun(tenantId: string, runId: string): Promise<Run | null> {
+  const row = await first(`SELECT * FROM runs WHERE tenant_id = ? AND id = ?`, [tenantId, runId]);
   return row ? toRun(row) : null;
+}
+
+/**
+ * そのジョブが最後に実際に稼働した時刻。
+ *
+ * 事前チェックの基準に使う。skipped は「何もしなかった」ので基準にしない
+ * ——skipped を含めると、新着が来ていても毎回スキップし続けてしまう。
+ */
+export async function getLastWorkedRunAt(jobId: string): Promise<string | null> {
+  const row = await first(
+    `SELECT started_at FROM runs
+      WHERE job_id = ? AND status IN ('succeeded','failed')
+      ORDER BY started_at DESC LIMIT 1`,
+    [jobId],
+  );
+  return row ? str(row.started_at) : null;
+}
+
+/** 事前チェックで足切りした回数。費用削減の効果を画面に出すために使う。 */
+export async function countSkippedRuns(tenantId: string, since: string): Promise<number> {
+  const row = await first(
+    `SELECT COUNT(*) AS c FROM runs
+      WHERE tenant_id = ? AND status = 'skipped' AND started_at >= ?`,
+    [tenantId, since],
+  );
+  return row ? num(row.c) : 0;
 }
 
 // ------------------------------------------------------------------ tasks
@@ -321,7 +372,7 @@ function toTask(r: Row): Task {
   };
 }
 
-export function createTask(input: {
+export async function createTask(input: {
   tenantId: string;
   runId: string;
   staffId: string;
@@ -329,7 +380,7 @@ export function createTask(input: {
   detail?: string | null;
   status?: TaskStatus;
   approvalId?: string | null;
-}): Task {
+}): Promise<Task> {
   const task: Task = {
     id: newId("tsk"),
     tenantId: input.tenantId,
@@ -341,12 +392,10 @@ export function createTask(input: {
     approvalId: input.approvalId ?? null,
     createdAt: nowIso(),
   };
-  getDb()
-    .prepare(
-      `INSERT INTO tasks (id, tenant_id, run_id, staff_id, title, detail, status, approval_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO tasks (id, tenant_id, run_id, staff_id, title, detail, status, approval_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       task.id,
       task.tenantId,
       task.runId,
@@ -356,70 +405,81 @@ export function createTask(input: {
       task.status,
       task.approvalId,
       task.createdAt,
-    );
+    ],
+  );
   return task;
 }
 
-export function getTask(tenantId: string, taskId: string): Task | null {
-  const row = getDb()
-    .prepare(`SELECT * FROM tasks WHERE tenant_id = ? AND id = ?`)
-    .get(tenantId, taskId) as Row | undefined;
+export async function getTask(tenantId: string, taskId: string): Promise<Task | null> {
+  const row = await first(`SELECT * FROM tasks WHERE tenant_id = ? AND id = ?`, [tenantId, taskId]);
   return row ? toTask(row) : null;
 }
 
 /** 承認・却下の結果を、稼働ログ側の表示にも反映する。 */
-export function setTaskStatusByApproval(
+export async function setTaskStatusByApproval(
   tenantId: string,
   approvalId: string,
   status: TaskStatus,
   detail?: string,
-): void {
+): Promise<void> {
   if (detail === undefined) {
-    getDb()
-      .prepare(`UPDATE tasks SET status = ? WHERE tenant_id = ? AND approval_id = ?`)
-      .run(status, tenantId, approvalId);
+    await run(`UPDATE tasks SET status = ? WHERE tenant_id = ? AND approval_id = ?`, [
+      status,
+      tenantId,
+      approvalId,
+    ]);
     return;
   }
-  getDb()
-    .prepare(`UPDATE tasks SET status = ?, detail = ? WHERE tenant_id = ? AND approval_id = ?`)
-    .run(status, detail, tenantId, approvalId);
+  await run(`UPDATE tasks SET status = ?, detail = ? WHERE tenant_id = ? AND approval_id = ?`, [
+    status,
+    detail,
+    tenantId,
+    approvalId,
+  ]);
 }
 
-export function listTasks(tenantId: string, opts?: { since?: string; limit?: number }): Task[] {
+export async function listTasks(
+  tenantId: string,
+  opts?: { since?: string; limit?: number },
+): Promise<Task[]> {
   const limit = opts?.limit ?? 100;
   if (opts?.since) {
     return (
-      getDb()
-        .prepare(
-          `SELECT * FROM tasks WHERE tenant_id = ? AND created_at >= ?
-           ORDER BY created_at DESC LIMIT ?`,
-        )
-        .all(tenantId, opts.since, limit) as Row[]
+      await query(
+        `SELECT * FROM tasks WHERE tenant_id = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT ?`,
+        [tenantId, opts.since, limit],
+      )
     ).map(toTask);
   }
   return (
-    getDb()
-      .prepare(`SELECT * FROM tasks WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`)
-      .all(tenantId, limit) as Row[]
+    await query(`SELECT * FROM tasks WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`, [
+      tenantId,
+      limit,
+    ])
   ).map(toTask);
 }
 
-export function listTasksByRun(tenantId: string, runId: string): Task[] {
+export async function listTasksByRun(tenantId: string, runId: string): Promise<Task[]> {
   return (
-    getDb()
-      .prepare(`SELECT * FROM tasks WHERE tenant_id = ? AND run_id = ? ORDER BY created_at`)
-      .all(tenantId, runId) as Row[]
+    await query(`SELECT * FROM tasks WHERE tenant_id = ? AND run_id = ? ORDER BY created_at`, [
+      tenantId,
+      runId,
+    ])
   ).map(toTask);
 }
 
-export function listTasksByStaff(tenantId: string, staffId: string, limit = 50): Task[] {
+export async function listTasksByStaff(
+  tenantId: string,
+  staffId: string,
+  limit = 50,
+): Promise<Task[]> {
   return (
-    getDb()
-      .prepare(
-        `SELECT * FROM tasks WHERE tenant_id = ? AND staff_id = ?
-         ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(tenantId, staffId, limit) as Row[]
+    await query(
+      `SELECT * FROM tasks WHERE tenant_id = ? AND staff_id = ?
+       ORDER BY created_at DESC LIMIT ?`,
+      [tenantId, staffId, limit],
+    )
   ).map(toTask);
 }
 
@@ -444,7 +504,7 @@ function toApproval(r: Row): Approval {
   };
 }
 
-export function createApproval(input: {
+export async function createApproval(input: {
   tenantId: string;
   runId: string | null;
   staffId: string;
@@ -452,7 +512,7 @@ export function createApproval(input: {
   preview: string;
   payload: Record<string, unknown>;
   risk?: RiskLevel;
-}): Approval {
+}): Promise<Approval> {
   const approval: Approval = {
     id: newId("apr"),
     tenantId: input.tenantId,
@@ -469,13 +529,11 @@ export function createApproval(input: {
     rejectionReason: null,
     resultSummary: null,
   };
-  getDb()
-    .prepare(
-      `INSERT INTO approvals
-         (id, tenant_id, run_id, staff_id, action, preview, payload_json, risk, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO approvals
+       (id, tenant_id, run_id, staff_id, action, preview, payload_json, risk, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+    [
       approval.id,
       approval.tenantId,
       approval.runId,
@@ -485,36 +543,41 @@ export function createApproval(input: {
       JSON.stringify(approval.payload),
       approval.risk,
       approval.createdAt,
-    );
+    ],
+  );
   return approval;
 }
 
-export function listApprovals(
+export async function listApprovals(
   tenantId: string,
   opts?: { status?: ApprovalStatus; limit?: number },
-): Approval[] {
+): Promise<Approval[]> {
   const limit = opts?.limit ?? 100;
   if (opts?.status) {
     return (
-      getDb()
-        .prepare(
-          `SELECT * FROM approvals WHERE tenant_id = ? AND status = ?
-           ORDER BY created_at DESC LIMIT ?`,
-        )
-        .all(tenantId, opts.status, limit) as Row[]
+      await query(
+        `SELECT * FROM approvals WHERE tenant_id = ? AND status = ?
+         ORDER BY created_at DESC LIMIT ?`,
+        [tenantId, opts.status, limit],
+      )
     ).map(toApproval);
   }
   return (
-    getDb()
-      .prepare(`SELECT * FROM approvals WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`)
-      .all(tenantId, limit) as Row[]
+    await query(`SELECT * FROM approvals WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`, [
+      tenantId,
+      limit,
+    ])
   ).map(toApproval);
 }
 
-export function getApproval(tenantId: string, approvalId: string): Approval | null {
-  const row = getDb()
-    .prepare(`SELECT * FROM approvals WHERE tenant_id = ? AND id = ?`)
-    .get(tenantId, approvalId) as Row | undefined;
+export async function getApproval(
+  tenantId: string,
+  approvalId: string,
+): Promise<Approval | null> {
+  const row = await first(`SELECT * FROM approvals WHERE tenant_id = ? AND id = ?`, [
+    tenantId,
+    approvalId,
+  ]);
   return row ? toApproval(row) : null;
 }
 
@@ -523,44 +586,46 @@ export function getApproval(tenantId: string, approvalId: string): Approval | nu
  * 二重タップやワーカーとの競合で同じ承認が2回実行されるのを防ぐ。
  * 遷移できたときだけ true。
  */
-export function decideApproval(input: {
+export async function decideApproval(input: {
   tenantId: string;
   approvalId: string;
   decision: "approved" | "rejected";
   decidedBy: string;
   rejectionReason?: string | null;
-}): boolean {
-  const result = getDb()
-    .prepare(
-      `UPDATE approvals
-          SET status = ?, decided_at = ?, decided_by = ?, rejection_reason = ?
-        WHERE tenant_id = ? AND id = ? AND status = 'pending'`,
-    )
-    .run(
+}): Promise<boolean> {
+  const changes = await run(
+    `UPDATE approvals
+        SET status = ?, decided_at = ?, decided_by = ?, rejection_reason = ?
+      WHERE tenant_id = ? AND id = ? AND status = 'pending'`,
+    [
       input.decision,
       nowIso(),
       input.decidedBy,
       input.rejectionReason ?? null,
       input.tenantId,
       input.approvalId,
-    );
-  return Number(result.changes) > 0;
+    ],
+  );
+  return changes > 0;
 }
 
-export function markApprovalExecuted(input: {
+export async function markApprovalExecuted(input: {
   approvalId: string;
   status: Extract<ApprovalStatus, "executed" | "failed">;
   resultSummary: string;
-}): void {
-  getDb()
-    .prepare(`UPDATE approvals SET status = ?, result_summary = ? WHERE id = ?`)
-    .run(input.status, input.resultSummary, input.approvalId);
+}): Promise<void> {
+  await run(`UPDATE approvals SET status = ?, result_summary = ? WHERE id = ?`, [
+    input.status,
+    input.resultSummary,
+    input.approvalId,
+  ]);
 }
 
-export function countPendingApprovals(tenantId: string): number {
-  const row = getDb()
-    .prepare(`SELECT COUNT(*) AS c FROM approvals WHERE tenant_id = ? AND status = 'pending'`)
-    .get(tenantId) as Row | undefined;
+export async function countPendingApprovals(tenantId: string): Promise<number> {
+  const row = await first(
+    `SELECT COUNT(*) AS c FROM approvals WHERE tenant_id = ? AND status = 'pending'`,
+    [tenantId],
+  );
   return row ? num(row.c) : 0;
 }
 
@@ -577,12 +642,12 @@ function toNote(r: Row): Note {
   };
 }
 
-export function upsertNote(input: {
+export async function upsertNote(input: {
   tenantId: string;
   staffId?: string | null;
   key: string;
   body: string;
-}): Note {
+}): Promise<Note> {
   const note: Note = {
     id: newId("not"),
     tenantId: input.tenantId,
@@ -591,35 +656,38 @@ export function upsertNote(input: {
     body: input.body,
     updatedAt: nowIso(),
   };
-  getDb()
-    .prepare(
-      `INSERT INTO notes (id, tenant_id, staff_id, key, body, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(tenant_id, key)
-       DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
-    )
-    .run(note.id, note.tenantId, note.staffId, note.key, note.body, note.updatedAt);
+  await run(
+    `INSERT INTO notes (id, tenant_id, staff_id, key, body, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, key)
+     DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
+    [note.id, note.tenantId, note.staffId, note.key, note.body, note.updatedAt],
+  );
   return note;
 }
 
-export function listNotes(tenantId: string, limit = 50): Note[] {
+export async function listNotes(tenantId: string, limit = 50): Promise<Note[]> {
   return (
-    getDb()
-      .prepare(`SELECT * FROM notes WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT ?`)
-      .all(tenantId, limit) as Row[]
+    await query(`SELECT * FROM notes WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT ?`, [
+      tenantId,
+      limit,
+    ])
   ).map(toNote);
 }
 
-export function searchNotes(tenantId: string, query: string, limit = 10): Note[] {
-  const like = `%${query}%`;
+export async function searchNotes(
+  tenantId: string,
+  queryText: string,
+  limit = 10,
+): Promise<Note[]> {
+  const like = `%${queryText}%`;
   return (
-    getDb()
-      .prepare(
-        `SELECT * FROM notes
-          WHERE tenant_id = ? AND (key LIKE ? OR body LIKE ?)
-          ORDER BY updated_at DESC LIMIT ?`,
-      )
-      .all(tenantId, like, like, limit) as Row[]
+    await query(
+      `SELECT * FROM notes
+        WHERE tenant_id = ? AND (key LIKE ? OR body LIKE ?)
+        ORDER BY updated_at DESC LIMIT ?`,
+      [tenantId, like, like, limit],
+    )
   ).map(toNote);
 }
 
@@ -636,46 +704,44 @@ function toMetric(r: Row): Metric {
   };
 }
 
-export function recordMetric(input: {
+export async function recordMetric(input: {
   tenantId: string;
   date: string;
   key: string;
   value: number;
   unit?: string | null;
-}): void {
-  getDb()
-    .prepare(
-      `INSERT INTO metrics (id, tenant_id, date, key, value, unit)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(tenant_id, date, key)
-       DO UPDATE SET value = excluded.value, unit = excluded.unit`,
-    )
-    .run(newId("mtr"), input.tenantId, input.date, input.key, input.value, input.unit ?? null);
+}): Promise<void> {
+  await run(
+    `INSERT INTO metrics (id, tenant_id, date, key, value, unit)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, date, key)
+     DO UPDATE SET value = excluded.value, unit = excluded.unit`,
+    [newId("mtr"), input.tenantId, input.date, input.key, input.value, input.unit ?? null],
+  );
 }
 
-export function listMetrics(tenantId: string, sinceDate: string): Metric[] {
+export async function listMetrics(tenantId: string, sinceDate: string): Promise<Metric[]> {
   return (
-    getDb()
-      .prepare(`SELECT * FROM metrics WHERE tenant_id = ? AND date >= ? ORDER BY date DESC, key`)
-      .all(tenantId, sinceDate) as Row[]
+    await query(`SELECT * FROM metrics WHERE tenant_id = ? AND date >= ? ORDER BY date DESC, key`, [
+      tenantId,
+      sinceDate,
+    ])
   ).map(toMetric);
 }
 
 // ------------------------------------------------------------ audit logs
 
-export function writeAudit(input: {
+export async function writeAudit(input: {
   tenantId: string;
   actor: string;
   action: string;
   target?: string | null;
   detail?: string | null;
-}): void {
-  getDb()
-    .prepare(
-      `INSERT INTO audit_logs (id, tenant_id, actor, action, target, detail, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+}): Promise<void> {
+  await run(
+    `INSERT INTO audit_logs (id, tenant_id, actor, action, target, detail, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
       newId("aud"),
       input.tenantId,
       input.actor,
@@ -683,14 +749,16 @@ export function writeAudit(input: {
       input.target ?? null,
       input.detail ?? null,
       nowIso(),
-    );
+    ],
+  );
 }
 
-export function listAudit(tenantId: string, limit = 100): AuditLog[] {
+export async function listAudit(tenantId: string, limit = 100): Promise<AuditLog[]> {
   return (
-    getDb()
-      .prepare(`SELECT * FROM audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`)
-      .all(tenantId, limit) as Row[]
+    await query(`SELECT * FROM audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`, [
+      tenantId,
+      limit,
+    ])
   ).map((r) => ({
     id: str(r.id),
     tenantId: str(r.tenant_id),
@@ -716,55 +784,61 @@ function toMediaAsset(r: Row): MediaAsset {
   };
 }
 
-export function addMediaAsset(input: {
+export async function addMediaAsset(input: {
   tenantId: string;
   url: string;
   description: string;
   tags?: string[];
-}): void {
-  getDb()
-    .prepare(
-      `INSERT INTO media_assets (id, tenant_id, url, description, tags, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(tenant_id, url)
-       DO UPDATE SET description = excluded.description, tags = excluded.tags`,
-    )
-    .run(
+}): Promise<void> {
+  await run(
+    `INSERT INTO media_assets (id, tenant_id, url, description, tags, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, url)
+     DO UPDATE SET description = excluded.description, tags = excluded.tags`,
+    [
       newId("med"),
       input.tenantId,
       input.url,
       input.description,
       (input.tags ?? []).join(","),
       nowIso(),
-    );
+    ],
+  );
 }
 
-export function listMediaAssets(tenantId: string, limit = 50): MediaAsset[] {
+export async function listMediaAssets(tenantId: string, limit = 50): Promise<MediaAsset[]> {
   return (
-    getDb()
-      .prepare(`SELECT * FROM media_assets WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`)
-      .all(tenantId, limit) as Row[]
+    await query(
+      `SELECT * FROM media_assets WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`,
+      [tenantId, limit],
+    )
   ).map(toMediaAsset);
 }
 
 /** AI社員が「秋の写真」のように探すためのゆるい検索。 */
-export function searchMediaAssets(tenantId: string, query: string, limit = 20): MediaAsset[] {
-  const like = `%${query}%`;
+export async function searchMediaAssets(
+  tenantId: string,
+  queryText: string,
+  limit = 20,
+): Promise<MediaAsset[]> {
+  const like = `%${queryText}%`;
   return (
-    getDb()
-      .prepare(
-        `SELECT * FROM media_assets
-          WHERE tenant_id = ? AND (description LIKE ? OR tags LIKE ?)
-          ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(tenantId, like, like, limit) as Row[]
+    await query(
+      `SELECT * FROM media_assets
+        WHERE tenant_id = ? AND (description LIKE ? OR tags LIKE ?)
+        ORDER BY created_at DESC LIMIT ?`,
+      [tenantId, like, like, limit],
+    )
   ).map(toMediaAsset);
 }
 
 /** 下書きに載った画像URLが、本当に登録済みのものかを確かめる。 */
-export function mediaUrlsAreRegistered(tenantId: string, urls: string[]): boolean {
+export async function mediaUrlsAreRegistered(
+  tenantId: string,
+  urls: string[],
+): Promise<boolean> {
   if (urls.length === 0) return false;
-  const known = new Set(listMediaAssets(tenantId, 500).map((m) => m.url));
+  const known = new Set((await listMediaAssets(tenantId, 500)).map((m) => m.url));
   return urls.every((u) => known.has(u));
 }
 
@@ -781,44 +855,44 @@ function toConnectorAccount(r: Row): ConnectorAccount {
   };
 }
 
-export function upsertConnectorAccount(input: {
+export async function upsertConnectorAccount(input: {
   tenantId: string;
   provider: ConnectorProvider;
   accountRef: string;
   credentials?: Record<string, unknown>;
   status?: ConnectorAccount["status"];
-}): void {
-  getDb()
-    .prepare(
-      `INSERT INTO connector_accounts (id, tenant_id, provider, account_ref, credentials_json, status)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(tenant_id, provider)
-       DO UPDATE SET account_ref = excluded.account_ref,
-                     credentials_json = excluded.credentials_json,
-                     status = excluded.status`,
-    )
-    .run(
+}): Promise<void> {
+  await run(
+    `INSERT INTO connector_accounts (id, tenant_id, provider, account_ref, credentials_json, status)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, provider)
+     DO UPDATE SET account_ref = excluded.account_ref,
+                   credentials_json = excluded.credentials_json,
+                   status = excluded.status`,
+    [
       newId("con"),
       input.tenantId,
       input.provider,
       input.accountRef,
       JSON.stringify(input.credentials ?? {}),
       input.status ?? "mock",
-    );
+    ],
+  );
 }
 
-export function getConnectorAccount(
+export async function getConnectorAccount(
   tenantId: string,
   provider: ConnectorProvider,
-): ConnectorAccount | null {
-  const row = getDb()
-    .prepare(`SELECT * FROM connector_accounts WHERE tenant_id = ? AND provider = ?`)
-    .get(tenantId, provider) as Row | undefined;
+): Promise<ConnectorAccount | null> {
+  const row = await first(`SELECT * FROM connector_accounts WHERE tenant_id = ? AND provider = ?`, [
+    tenantId,
+    provider,
+  ]);
   return row ? toConnectorAccount(row) : null;
 }
 
-export function listConnectorAccounts(tenantId: string): ConnectorAccount[] {
-  return (
-    getDb().prepare(`SELECT * FROM connector_accounts WHERE tenant_id = ?`).all(tenantId) as Row[]
-  ).map(toConnectorAccount);
+export async function listConnectorAccounts(tenantId: string): Promise<ConnectorAccount[]> {
+  return (await query(`SELECT * FROM connector_accounts WHERE tenant_id = ?`, [tenantId])).map(
+    toConnectorAccount,
+  );
 }

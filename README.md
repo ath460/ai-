@@ -15,6 +15,7 @@
 | **承認フロー** | 社内作業は全自動。外部に出るもの（メール・SNS・掲載更新・予定登録）だけスマホで1タップ承認 |
 | **スマホ専用画面** | 稼働ログ／承認待ち／AI社員別／日報。PWA なのでホーム画面に置ける |
 | **マルチテナント** | 店舗ごとにデータ・文体・接続先を分離。クライアント提供を前提にした構造 |
+| **費用の足切り** | やることが無い回はモデルを呼ばずに終了する。30分ごとのジョブの空振り分を丸ごと削る |
 
 ### 接続状況
 
@@ -69,6 +70,7 @@ npm run worker            # 24時間の自動稼働を開始
 |---|---|
 | `npm run dev` | ダッシュボード（開発） |
 | `npm run build` / `npm start` | 本番ビルド・起動 |
+| `npm run db:migrate` | スキーマ適用（何度実行しても安全） |
 | `npm run db:seed` | デモデータ投入（既存テナントがあれば何もしない） |
 | `npm run worker` | 常駐ワーカー。毎分ジョブを確認して実行 |
 | `npm run tick` | 今この分に該当するジョブだけ実行（本番と同じ挙動） |
@@ -131,20 +133,25 @@ Instagram が画像必須なので、AI社員が画像URLを捏造できない�
 AI社員エンジン側の変更は不要です。SNS はプラットフォーム別のルーティングを
 `src/lib/connectors/index.ts` の `createRoutedSocialConnector` で行っています。
 
-### Vercel へのデプロイ
+### 24時間動かす（デプロイ）
 
-`vercel.json` に毎分の Cron を定義済みです。
+**推奨は VPS 1台**です。いまの構成が無改造でそのまま動きます。
+月600〜900円の最小プランで足ります（負荷はほぼ AI 呼び出しの待ち時間）。
 
-```json
-{ "crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }] }
-```
+DB は `DATABASE_URL` の有無で切り替わります。**コードの変更は要りません。**
 
-**本番では `CRON_SECRET` を必ず設定してください。** 未設定だと本番環境では 401 を返します
-（ローカルでは開発の利便のため通します）。
+| 環境 | DB | 設定 |
+|---|---|---|
+| VPS 1台 | SQLite | `DATABASE_URL` 未設定のまま |
+| Railway / Render | Postgres | `DATABASE_URL` を設定 |
+| Vercel | Postgres 必須 | `DATABASE_URL` + `CRON_SECRET` |
 
-> ⚠️ Vercel はファイルシステムが読み取り専用のため、SQLite のままではデプロイできません。
-> `src/lib/db/client.ts` と `src/lib/db/repo.ts` を Postgres 実装に差し替えてください。
-> SQL は全て repo.ts に閉じているので、他のファイルは変更不要です。
+Vercel は**常駐ワーカーを置けない**ため `vercel.json` の Cron 経由になります。
+Cron の最短実行間隔と関数の最大実行時間はプランで変わるので、事前に確認してください。
+**本番では `CRON_SECRET` を必ず設定してください**（未設定だと本番では 401 を返します）。
+
+systemd の設定、HTTPS と認証、バックアップ、**費用の見積もり**は
+[docs/deploy.md](docs/deploy.md) にまとめています。
 
 ---
 
@@ -154,12 +161,14 @@ AI社員エンジン側の変更は不要です。SNS はプラットフォー�
 src/
   lib/
     types.ts              ドメイン型（DB実装に依存しない）
-    db/                   SQLite 実装。SQL は repo.ts に閉じている
+    db/                   driver.ts / sqlite.ts / postgres.ts / repo.ts
+                          SQL は repo.ts に閉じ、方言差はドライバ層が吸収する
     connectors/           Gmail / カレンダー（実接続）、SNS / MEO（スタブ）
     agents/
       prompts.ts          職種別 system prompt と文体設計の差し込み
       tools.ts            AI社員のツール（社内=即実行 / draft_*=承認キュー）
       runner.ts           1ジョブの実行。スロット予約による冪等化
+      precheck.ts         モデルを呼ぶ前の足切り（費用の大半を決める）
       dispatch.ts         承認済みアクションの実行（外部に出る唯一の出口）
     scheduler/            cron 評価（タイムゾーン対応）と tick
   app/                    スマホ専用 UI（Next.js App Router）
@@ -190,4 +199,7 @@ scripts/                  migrate / seed / tick
 - **UI はシングルテナント表示**です。データ構造は全テーブルが `tenant_id` を持つマルチテナントですが、
   画面は `ONYX_TENANT_ID`（未設定なら最初の1件）だけを見ます。店舗切り替え UI は未実装です。
 - **AI社員の実稼働は未検証**です。開発環境に API キーが無いため、承認フロー・冪等性・
-  コネクタ経由の実行までは検証済みですが、モデル呼び出しを伴う経路は動作確認していません。
+  事前チェック・コネクタ経由の実行までは SQLite と Postgres の両方で検証済みですが、
+  モデル呼び出しを伴う経路は動作確認していません。
+- **事前チェックの削減率は店舗次第**です。「新着メールが無ければ起動しない」という条件なので、
+  問い合わせが多い店舗では効きが小さくなります。日報画面に実際のスキップ回数が出ます。

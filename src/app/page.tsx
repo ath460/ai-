@@ -30,16 +30,19 @@ export const dynamic = "force-dynamic";
  *   3. 稼働ログの時系列
  * を置いている。スクロールせずに 1 が見えることを最優先にしている。
  */
-export default function HomePage() {
-  const tenant = getDefaultTenant();
+export default async function HomePage() {
+  const tenant = await getDefaultTenant();
   if (!tenant) return <SetupNotice />;
 
   const since = startOfTodayIso(tenant.timezone);
-  const staff = listStaff(tenant.id);
-  const tasks = listTasks(tenant.id, { since, limit: 200 });
-  const pending = countPendingApprovals(tenant.id);
-  const lastRun = listRuns(tenant.id, 1)[0] ?? null;
-  const connectors = connectorStatus(tenant.id);
+  const [staff, tasks, pending, recentRuns, connectors] = await Promise.all([
+    listStaff(tenant.id),
+    listTasks(tenant.id, { since, limit: 200 }),
+    countPendingApprovals(tenant.id),
+    listRuns(tenant.id, 1),
+    connectorStatus(tenant.id),
+  ]);
+  const lastRun = recentRuns[0] ?? null;
   const staffById = new Map(staff.map((s) => [s.id, s]));
 
   const doneCount = tasks.filter((t) => t.status === "done").length;

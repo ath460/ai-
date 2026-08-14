@@ -19,31 +19,30 @@ export * from "./types.ts";
  * 人間に繋ぎ込みを促せる。
  */
 
-function googleCredentials(tenantId: string): GoogleCredentials | null {
+async function googleCredentials(tenantId: string): Promise<GoogleCredentials | null> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
 
   // リフレッシュトークンはテナントごと。単一テナント運用のときだけ env で代用できる。
-  const account = getConnectorAccount(tenantId, "gmail");
+  const account = await getConnectorAccount(tenantId, "gmail");
   const refreshToken =
     (account?.credentials.refreshToken as string | undefined) ?? process.env.GOOGLE_REFRESH_TOKEN;
   if (!refreshToken) return null;
+
+  const calendarAccount = await getConnectorAccount(tenantId, "google_calendar");
 
   return {
     clientId,
     clientSecret,
     refreshToken,
     userId: (account?.credentials.userId as string | undefined) ?? "me",
-    calendarId:
-      (getConnectorAccount(tenantId, "google_calendar")?.credentials.calendarId as
-        | string
-        | undefined) ?? "primary",
+    calendarId: (calendarAccount?.credentials.calendarId as string | undefined) ?? "primary",
   };
 }
 
-function instagramCredentials(tenantId: string): InstagramCredentials | null {
-  const account = getConnectorAccount(tenantId, "instagram");
+async function instagramCredentials(tenantId: string): Promise<InstagramCredentials | null> {
+  const account = await getConnectorAccount(tenantId, "instagram");
 
   const accessToken =
     (account?.credentials.accessToken as string | undefined) ??
@@ -66,8 +65,8 @@ function instagramCredentials(tenantId: string): InstagramCredentials | null {
  * 現状 Instagram だけが実接続で、X と Google ビジネスプロフィールはモックのまま。
  * 混在していることを live 1つの真偽値で潰さず、livePlatforms で個別に持つ。
  */
-function createRoutedSocialConnector(tenantId: string): SocialConnector {
-  const credentials = instagramCredentials(tenantId);
+async function createRoutedSocialConnector(tenantId: string): Promise<SocialConnector> {
+  const credentials = await instagramCredentials(tenantId);
   const instagram = credentials ? createInstagramConnector(credentials) : null;
   const fallback = createMockSocialConnector();
 
@@ -84,14 +83,17 @@ function createRoutedSocialConnector(tenantId: string): SocialConnector {
   };
 }
 
-export function resolveConnectors(tenantId: string): ConnectorBundle {
-  const creds = googleCredentials(tenantId);
+export async function resolveConnectors(tenantId: string): Promise<ConnectorBundle> {
+  const [creds, social] = await Promise.all([
+    googleCredentials(tenantId),
+    createRoutedSocialConnector(tenantId),
+  ]);
 
   return {
     // Google の認証が通らないときだけモックに落とす。片方だけ落ちることはない。
     mail: creds ? createGmailConnector(creds) : createMockMailConnector(),
     calendar: creds ? createCalendarConnector(creds) : createMockCalendarConnector(),
-    social: createRoutedSocialConnector(tenantId),
+    social,
     // MEO / 掲載媒体は接続先の仕様確認待ちのため現状スタブ。
     listing: createMockListingConnector(),
   };
@@ -101,7 +103,7 @@ export function resolveConnectors(tenantId: string): ConnectorBundle {
 export async function verifyInstagram(
   tenantId: string,
 ): Promise<{ configured: boolean; ok: boolean; detail: string }> {
-  const credentials = instagramCredentials(tenantId);
+  const credentials = await instagramCredentials(tenantId);
   if (!credentials) {
     return {
       configured: false,
@@ -114,12 +116,10 @@ export async function verifyInstagram(
 }
 
 /** UI の「接続状況」表示用。 */
-export function connectorStatus(tenantId: string): Array<{
-  label: string;
-  live: boolean;
-  note: string;
-}> {
-  const bundle = resolveConnectors(tenantId);
+export async function connectorStatus(tenantId: string): Promise<
+  Array<{ label: string; live: boolean; note: string }>
+> {
+  const bundle = await resolveConnectors(tenantId);
   const igLive = bundle.social.livePlatforms.includes("instagram");
 
   return [

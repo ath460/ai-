@@ -57,11 +57,9 @@ function shutdown(signal: string): void {
   stopping = true;
   // 実行中の tick を待ってから DB を閉じる。
   const waitForIdle = setInterval(() => {
-    if (!running) {
-      clearInterval(waitForIdle);
-      closeDb();
-      process.exit(0);
-    }
+    if (running) return;
+    clearInterval(waitForIdle);
+    void closeDb().finally(() => process.exit(0));
   }, 200);
 }
 

@@ -27,21 +27,21 @@ export const viewport: Viewport = {
 };
 
 /** タブのバッジ用。DB 未初期化でも画面は出したいので、失敗しても 0 で続行する。 */
-function pendingApprovalCount(): number {
+async function pendingApprovalCount(): Promise<number> {
   try {
-    const tenant = getDefaultTenant();
-    return tenant ? countPendingApprovals(tenant.id) : 0;
+    const tenant = await getDefaultTenant();
+    return tenant ? await countPendingApprovals(tenant.id) : 0;
   } catch {
     return 0;
   }
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
       <body>
         {children}
-        <BottomNav pendingCount={pendingApprovalCount()} />
+        <BottomNav pendingCount={await pendingApprovalCount()} />
       </body>
     </html>
   );

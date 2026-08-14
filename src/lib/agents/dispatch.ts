@@ -19,7 +19,7 @@ function asStringArray(v: unknown): string[] {
 }
 
 export async function executeApproval(approval: Approval): Promise<DispatchResult> {
-  const connectors = resolveConnectors(approval.tenantId);
+  const connectors = await resolveConnectors(approval.tenantId);
   const p = approval.payload;
 
   switch (approval.action) {
@@ -79,12 +79,12 @@ export async function executeApproval(approval: Approval): Promise<DispatchResul
 export async function executeAndRecord(approval: Approval): Promise<DispatchResult> {
   try {
     const result = await executeApproval(approval);
-    markApprovalExecuted({
+    await markApprovalExecuted({
       approvalId: approval.id,
       status: result.ok ? "executed" : "failed",
       resultSummary: result.summary,
     });
-    writeAudit({
+    await writeAudit({
       tenantId: approval.tenantId,
       actor: "system",
       action: result.ok ? "approval.executed" : "approval.failed",
@@ -94,8 +94,8 @@ export async function executeAndRecord(approval: Approval): Promise<DispatchResu
     return result;
   } catch (err) {
     const summary = err instanceof Error ? err.message : String(err);
-    markApprovalExecuted({ approvalId: approval.id, status: "failed", resultSummary: summary });
-    writeAudit({
+    await markApprovalExecuted({ approvalId: approval.id, status: "failed", resultSummary: summary });
+    await writeAudit({
       tenantId: approval.tenantId,
       actor: "system",
       action: "approval.failed",

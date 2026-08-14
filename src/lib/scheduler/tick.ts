@@ -23,16 +23,25 @@ export interface TickResult {
 /** 同時にモデルへ投げる本数。API のレート制限と費用の上限を兼ねる。 */
 const CONCURRENCY = 2;
 
-export function findDueJobs(at: Date = new Date()): Job[] {
-  return listAllEnabledJobs().filter((job) => {
-    const tenant = getTenant(job.tenantId);
-    if (!tenant) return false;
-    return cronMatches(job.cron, at, tenant.timezone);
+export async function findDueJobs(at: Date = new Date()): Promise<Job[]> {
+  const jobs = await listAllEnabledJobs();
+
+  // テナントは数が少ないので、ジョブごとに引かずまとめて解決する。
+  const timezones = new Map<string, string>();
+  for (const job of jobs) {
+    if (timezones.has(job.tenantId)) continue;
+    const tenant = await getTenant(job.tenantId);
+    if (tenant) timezones.set(tenant.id, tenant.timezone);
+  }
+
+  return jobs.filter((job) => {
+    const tz = timezones.get(job.tenantId);
+    return tz ? cronMatches(job.cron, at, tz) : false;
   });
 }
 
 export async function tick(at: Date = new Date()): Promise<TickResult> {
-  const due = findDueJobs(at);
+  const due = await findDueJobs(at);
   const result: TickResult = {
     checkedAt: at.toISOString(),
     due: due.length,

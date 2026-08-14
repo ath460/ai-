@@ -5,12 +5,21 @@ import { describeCron } from "@/lib/scheduler/cron";
 
 export const dynamic = "force-dynamic";
 
-export default function StaffListPage() {
-  const tenant = getDefaultTenant();
+export default async function StaffListPage() {
+  const tenant = await getDefaultTenant();
   if (!tenant) return <SetupNotice />;
 
-  const staff = listStaff(tenant.id);
-  const jobs = listJobs(tenant.id);
+  const [staff, jobs] = await Promise.all([listStaff(tenant.id), listJobs(tenant.id)]);
+
+  // JSX の中では await できないので、最終稼働を先に引いておく。
+  const lastTaskByStaff = new Map(
+    await Promise.all(
+      staff.map(
+        async (s) =>
+          [s.id, (await listTasksByStaff(tenant.id, s.id, 1))[0] ?? null] as const,
+      ),
+    ),
+  );
 
   return (
     <main>
@@ -18,7 +27,7 @@ export default function StaffListPage() {
       <div className="space-y-3 px-5 pb-8">
         {staff.map((s) => {
           const myJobs = jobs.filter((j) => j.staffId === s.id);
-          const last = listTasksByStaff(tenant.id, s.id, 1)[0];
+          const last = lastTaskByStaff.get(s.id) ?? null;
           return (
             <Card key={s.id} href={`/staff/${s.id}`}>
               <div className="flex items-center gap-2">

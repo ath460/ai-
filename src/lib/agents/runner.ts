@@ -10,6 +10,7 @@ import {
   writeAudit,
 } from "../db/repo.ts";
 import type { Approval, Job, Task } from "../types.ts";
+import { shouldRunJob } from "./precheck.ts";
 import { buildSystemPrompt, buildUserPrompt } from "./prompts.ts";
 import { buildTools, type AgentRunContext } from "./tools.ts";
 
@@ -49,12 +50,15 @@ export function slotKeyFor(jobId: string, at: Date = new Date()): string {
  * ジョブを1回実行する。
  *
  * 同じスロットが既に走っていれば "skipped" を返して何もしない。
+ * 事前チェックで足切りされた場合も "skipped"（モデルを呼ばないので費用が出ない）。
  * 例外は投げない。失敗も run レコードに残して返す（1件の失敗で
  * スケジューラ全体を止めないため）。
  */
 export async function runJob(job: Job, at: Date = new Date()): Promise<RunOutcome> {
-  const tenant = getTenant(job.tenantId);
-  const staff = getStaff(job.tenantId, job.staffId);
+  const [tenant, staff] = await Promise.all([
+    getTenant(job.tenantId),
+    getStaff(job.tenantId, job.staffId),
+  ]);
 
   if (!tenant || !staff) {
     return {
@@ -66,7 +70,9 @@ export async function runJob(job: Job, at: Date = new Date()): Promise<RunOutcom
     };
   }
 
-  const run = claimRunSlot({
+  // スロットの予約を先に取る。事前チェックより前に取るのは、
+  // 複数プロセスが同時に同じ受信箱を読みに行くのを防ぐため。
+  const run = await claimRunSlot({
     tenantId: job.tenantId,
     jobId: job.id,
     staffId: job.staffId,
@@ -75,22 +81,43 @@ export async function runJob(job: Job, at: Date = new Date()): Promise<RunOutcom
 
   // 同一スロットを他のプロセスが既に取っている。
   if (!run) {
-    return { status: "skipped", runId: null, summary: "同じ時間枠で実行済み。", tasks: [], approvals: [] };
+    return {
+      status: "skipped",
+      runId: null,
+      summary: "同じ時間枠で実行済み。",
+      tasks: [],
+      approvals: [],
+    };
   }
 
-  touchJobLastRun(job.id, run.startedAt);
+  const connectors = await resolveConnectors(tenant.id);
+
+  // モデルを呼ぶ前の足切り。ここで止まれば、この起動の費用はゼロ。
+  const precheck = await shouldRunJob(job, connectors);
+  if (!precheck.shouldRun) {
+    await finishRun({ runId: run.id, status: "skipped", summary: precheck.reason });
+    return {
+      status: "skipped",
+      runId: run.id,
+      summary: precheck.reason,
+      tasks: [],
+      approvals: [],
+    };
+  }
+
+  await touchJobLastRun(job.id, run.startedAt);
 
   const ctx: AgentRunContext = {
     tenant,
     staff,
     runId: run.id,
-    connectors: resolveConnectors(tenant.id),
+    connectors,
     tasks: [],
     approvals: [],
   };
 
   // 却下された下書きの理由を次回に効かせる。「直しが何度でも効く」の実体。
-  const recentRejections = listApprovals(tenant.id, { status: "rejected", limit: 5 })
+  const recentRejections = (await listApprovals(tenant.id, { status: "rejected", limit: 5 }))
     .filter((a) => a.staffId === staff.id && a.rejectionReason)
     .map((a) => ({ preview: a.preview.slice(0, 80), reason: a.rejectionReason as string }));
 
@@ -133,15 +160,21 @@ export async function runJob(job: Job, at: Date = new Date()): Promise<RunOutcom
 
     if (finalMessage.stop_reason === "refusal") {
       const detail = finalMessage.stop_details?.explanation ?? "内容が安全ポリシーに抵触しました。";
-      finishRun({ runId: run.id, status: "failed", error: detail, inputTokens, outputTokens });
-      writeAudit({
+      await finishRun({ runId: run.id, status: "failed", error: detail, inputTokens, outputTokens });
+      await writeAudit({
         tenantId: tenant.id,
         actor: staff.name,
         action: "run.refused",
         target: run.id,
         detail,
       });
-      return { status: "failed", runId: run.id, summary: detail, tasks: ctx.tasks, approvals: ctx.approvals };
+      return {
+        status: "failed",
+        runId: run.id,
+        summary: detail,
+        tasks: ctx.tasks,
+        approvals: ctx.approvals,
+      };
     }
 
     const summary =
@@ -151,8 +184,8 @@ export async function runJob(job: Job, at: Date = new Date()): Promise<RunOutcom
         .join("\n")
         .trim() || "報告なし。";
 
-    finishRun({ runId: run.id, status: "succeeded", summary, inputTokens, outputTokens });
-    writeAudit({
+    await finishRun({ runId: run.id, status: "succeeded", summary, inputTokens, outputTokens });
+    await writeAudit({
       tenantId: tenant.id,
       actor: staff.name,
       action: "run.succeeded",
@@ -160,11 +193,17 @@ export async function runJob(job: Job, at: Date = new Date()): Promise<RunOutcom
       detail: `${job.name} / タスク${ctx.tasks.length}件 / 承認待ち${ctx.approvals.length}件`,
     });
 
-    return { status: "succeeded", runId: run.id, summary, tasks: ctx.tasks, approvals: ctx.approvals };
+    return {
+      status: "succeeded",
+      runId: run.id,
+      summary,
+      tasks: ctx.tasks,
+      approvals: ctx.approvals,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    finishRun({ runId: run.id, status: "failed", error: message });
-    writeAudit({
+    await finishRun({ runId: run.id, status: "failed", error: message });
+    await writeAudit({
       tenantId: tenant.id,
       actor: staff.name,
       action: "run.failed",

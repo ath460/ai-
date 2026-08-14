@@ -13,14 +13,17 @@ export const dynamic = "force-dynamic";
  * AI社員は夜のうちに下書きを積む。店長は朝、この画面を上から潰すだけで、
  * 外部に出るものだけ人の目を通したことになる。
  */
-export default function ApprovalsPage() {
-  const tenant = getDefaultTenant();
+export default async function ApprovalsPage() {
+  const tenant = await getDefaultTenant();
   if (!tenant) return <SetupNotice />;
 
-  const staff = listStaff(tenant.id);
+  const [staff, pending, all] = await Promise.all([
+    listStaff(tenant.id),
+    listApprovals(tenant.id, { status: "pending", limit: 50 }),
+    listApprovals(tenant.id, { limit: 30 }),
+  ]);
   const staffById = new Map(staff.map((s) => [s.id, s]));
-  const pending = listApprovals(tenant.id, { status: "pending", limit: 50 });
-  const recent = listApprovals(tenant.id, { limit: 30 }).filter((a) => a.status !== "pending");
+  const recent = all.filter((a) => a.status !== "pending");
 
   return (
     <main>

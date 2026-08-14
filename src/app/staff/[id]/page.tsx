@@ -14,15 +14,21 @@ export const dynamic = "force-dynamic";
 
 export default async function StaffDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const tenant = getDefaultTenant();
+  const tenant = await getDefaultTenant();
   if (!tenant) notFound();
 
-  const staff = getStaff(tenant.id, id);
+  const staff = await getStaff(tenant.id, id);
   if (!staff) notFound();
 
-  const jobs = listJobs(tenant.id).filter((j) => j.staffId === staff.id);
-  const tasks = listTasksByStaff(tenant.id, staff.id, 40);
-  const runs = listRuns(tenant.id, 30).filter((r) => r.staffId === staff.id);
+  const [allJobs, tasks, allRuns] = await Promise.all([
+    listJobs(tenant.id),
+    listTasksByStaff(tenant.id, staff.id, 40),
+    listRuns(tenant.id, 60),
+  ]);
+  const jobs = allJobs.filter((j) => j.staffId === staff.id);
+  // 事前チェックで足切りしたものは実行履歴に混ぜない。件数だけ別に出す。
+  const runs = allRuns.filter((r) => r.staffId === staff.id && r.status !== "skipped");
+  const skipped = allRuns.filter((r) => r.staffId === staff.id && r.status === "skipped").length;
 
   return (
     <main>
@@ -68,6 +74,11 @@ export default async function StaffDetailPage({ params }: { params: Promise<{ id
 
       <section className="mt-8">
         <SectionTitle count={runs.length}>実行履歴</SectionTitle>
+        {skipped > 0 ? (
+          <p className="mb-2 px-5 text-[11px] text-[color:var(--color-ash)]">
+            ほかに {skipped} 回は、やることが無いと判定して起動していません（費用なし）。
+          </p>
+        ) : null}
         {runs.length === 0 ? (
           <EmptyState>まだ実行されていません。</EmptyState>
         ) : (

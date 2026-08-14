@@ -24,7 +24,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 async function main(): Promise<void> {
   if (runAll || targetJobId) {
-    const jobs = listAllEnabledJobs().filter((j) => !targetJobId || j.id === targetJobId);
+    const jobs = (await listAllEnabledJobs()).filter((j) => !targetJobId || j.id === targetJobId);
 
     if (jobs.length === 0) {
       console.log("対象のジョブがありません。先に `npm run db:seed` を実行してください。");
@@ -61,4 +61,6 @@ main()
     console.error(err);
     process.exitCode = 1;
   })
-  .finally(() => closeDb());
+  .finally(async () => {
+    await closeDb();
+  });

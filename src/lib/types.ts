@@ -14,8 +14,14 @@ export const STAFF_ROLE_LABEL: Record<StaffRole, string> = {
   backoffice: "事務",
 };
 
-/** 実行単位（1回のジョブ起動）の状態。 */
-export type RunStatus = "queued" | "running" | "succeeded" | "failed";
+/**
+ * 実行単位（1回のジョブ起動）の状態。
+ *
+ * skipped は「事前チェックで足切りし、モデルを呼ばなかった」状態。
+ * 失敗ではないので failed と分けている。費用の大半はモデル呼び出しなので、
+ * ここを分けておくと「何回分の費用を抑えたか」がそのまま出せる。
+ */
+export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "skipped";
 
 /** 稼働タスク（AI社員がやった1件の仕事）の状態。 */
 export type TaskStatus = "done" | "waiting_approval" | "blocked";
@@ -76,6 +82,18 @@ export interface Staff {
   createdAt: string;
 }
 
+/**
+ * モデルを呼ぶ前の足切り条件。
+ *
+ * 費用の大半は Opus の1回の起動なので、「やることが無いのに起動する」を
+ * 潰せるかどうかが運用コストを決める。判定に使うのはコネクタの読み取りだけで、
+ * モデルは呼ばない。
+ *
+ * - always    : 毎回起動する（日次の集計や投稿など、必ず仕事がある種類）
+ * - new_inbox : 前回稼働以降に新着メールが無ければ起動しない
+ */
+export type JobPrecheck = "always" | "new_inbox";
+
 export interface Job {
   id: string;
   tenantId: string;
@@ -85,6 +103,7 @@ export interface Job {
   cron: string;
   /** そのジョブでAI社員に与える指示。 */
   instruction: string;
+  precheck: JobPrecheck;
   enabled: boolean;
   lastRunAt: string | null;
 }
