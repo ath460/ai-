@@ -143,7 +143,7 @@ DB は `DATABASE_URL` の有無で切り替わります。**コードの変更�
 | 環境 | DB | 設定 |
 |---|---|---|
 | VPS 1台 | SQLite | `DATABASE_URL` 未設定のまま |
-| Railway / Render | Postgres | `DATABASE_URL` を設定 |
+| **Render** | Postgres | **`render.yaml` 同梱。Blueprint を指すだけ** |
 | Vercel | Postgres 必須 | `DATABASE_URL` + `CRON_SECRET` |
 
 Vercel は**常駐ワーカーを置けない**ため `vercel.json` の Cron 経由になります。

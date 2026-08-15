@@ -9,13 +9,17 @@ Postgres 対応も入っているので、Railway / Render / Vercel + マネー�
 
 ## 選択肢の比較
 
-| | VPS 1台（推奨） | Railway / Render | Vercel + マネージドPostgres |
+| | VPS 1台 | Render（設定済み） | Vercel |
 |---|---|---|---|
-| DB | SQLite（設定不要） | Postgres or SQLite（永続ボリューム） | Postgres 必須 |
-| 常駐ワーカー | そのまま動く | 別プロセスとして動く | **置けない**（Cron のみ） |
-| コード変更 | 不要 | 不要 | 不要（`DATABASE_URL` を入れるだけ） |
-| 月額 | 600〜900円 | 10〜20ドル | Cron の実行間隔がプラン依存 |
+| DB | SQLite（設定不要） | Postgres（自動で注入） | Postgres 必須 |
+| 常駐ワーカー | systemd で常駐 | worker サービス（**有料のみ**） | **置けない**（Cron のみ） |
+| コード変更 | 不要 | 不要 | 不要 |
+| 設定ファイル | 手で書く | `render.yaml` 同梱 | `vercel.json` 同梱 |
 | サーバー管理 | 必要 | 不要 | 不要 |
+| 最小構成の月額 | 600〜900円 | ワーカー分の課金が必須 | Cron の実行間隔がプラン依存 |
+
+**手間をかけたくないなら Render**（`render.yaml` を置いてあるので Blueprint を
+指すだけ）、**費用を抑えたいなら VPS**（無改造で全部1台に載る）です。
 
 **Vercel を選ぶ場合の注意**: Cron の最短実行間隔と関数の最大実行時間はプランで変わります。
 AI社員の1ジョブは思考とツール往復で数分かかることがあるため、契約プランでの上限を
@@ -127,6 +131,59 @@ find /var/backups -name 'onyx-*.sqlite' -mtime +30 -delete
 
 ---
 
+## Render にデプロイする
+
+`render.yaml`（Blueprint）をリポジトリに置いてあります。Web・ワーカー・Postgres の
+3つがまとめて作られます。
+
+### 手順
+
+1. Render にログインし、**Blueprints → New Blueprint Instance**
+2. このリポジトリを選ぶ（`render.yaml` が自動で読まれます）
+3. `sync: false` の環境変数を入力する画面が出るので、少なくとも
+   **`ANTHROPIC_API_KEY`** を入れる（Google と Instagram は空でもモックで動きます）
+4. Apply
+
+`DATABASE_URL` は `fromDatabase` で自動的に注入されるので、手で設定する必要はありません。
+スキーマは初回アクセス時に自動で適用されます（`CREATE TABLE IF NOT EXISTS` のみ）。
+
+### 初期データの投入
+
+デプロイしただけでは店舗が1件も無く、画面はセットアップ案内のままです。
+Render Shell（`onyx-web` サービス → Shell タブ）から実行します。
+
+```bash
+npm run db:seed
+```
+
+**シードの中身はデモ用の居酒屋です。** 実店舗で使うなら、先に `scripts/seed.ts` の
+店名・文体・申し送り・写真URLを書き換えてから実行してください。
+
+### 料金と、無料プランの落とし穴
+
+| サービス | 既定 | 注意 |
+|---|---|---|
+| `onyx-worker` | **starter（有料）** | **ワーカーに無料プランはありません。** ここが唯一の必須課金です |
+| `onyx-db` | free | **無料 Postgres はデータが30日で消えます。** 試用を超えたら必ず有料へ |
+| `onyx-web` | free | アクセスが無いとスリープし、初回表示に数十秒かかります |
+
+Web がスリープしても**ワーカーは別サービスなので AI社員は動き続けます**。
+朝の初回表示の待ちが許容できないなら、`onyx-web` を starter に上げてください。
+
+承認履歴と監査ログが入るため、**無料 Postgres のまま運用に入らないでください。**
+`render.yaml` の `onyx-db` の `plan` を書き換えるだけです。
+
+### 注意点
+
+- **Cron ではなくワーカーを使っています。** Render には Cron Job サービスもありますが、
+  常駐ワーカーのほうが1分粒度で回せて、AI社員の長い実行時間も気にせずに済みます。
+- **リージョン**は `singapore`（日本から最寄り）にしてあります。変更する場合は
+  Web・ワーカー・DB を揃えてください。揃っていないと DB 接続が外部経由になります。
+- **認証がまだありません。** Render の URL は推測しにくいですが公開URLです。
+  クライアントに渡す前にログインを実装してください。
+
+---
+
 ## Postgres で動かす
 
 `DATABASE_URL` を設定するだけで切り替わります。コードの変更は要りません。
@@ -137,7 +194,9 @@ npm run db:migrate   # スキーマ適用
 npm run db:seed      # 初回のみ
 ```
 
-- **TLS**: 既定で TLS 接続します。ローカル検証で TLS 無しの Postgres に繋ぐときだけ `PGSSL=disable`。
+- **TLS**: 接続文字列に `sslmode=` があればそれに従い、無ければ TLS を張ります
+  （マネージドPostgres は概ね必須のため）。TLS 無しのローカル Postgres に繋ぐときだけ
+  `PGSSL=disable` を設定してください。
 - **接続数**: `PGPOOL_MAX`（既定5）は1プロセスあたりの上限です。
   サーバーレスではプロセス数を制御できないので、**プーラー付きの接続文字列**
   （Neon / Supabase の pgbouncer エンドポイント）を使ってください。

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "ONYX AI社員 — 営業・マーケティング・事務を自動で回す運用エンジンとスマホ専用ダッシュボード",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.5.0 <23"
   },
   "scripts": {
     "dev": "next dev",

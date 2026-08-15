@@ -1,0 +1,107 @@
+# Render Blueprint — ONYX AI社員
+#
+# Render ダッシュボードの Blueprints > New Blueprint Instance でこのリポジトリを
+# 指定すると、以下の3つがまとめて作られます。
+#
+#   1. onyx-web    … スマホ用ダッシュボード（Next.js）
+#   2. onyx-worker … 毎分ジョブを確認して AI社員を動かす常駐ワーカー
+#   3. onyx-db     … Postgres
+#
+# ⚠️ 事前に読んでください
+#
+# - **ワーカーは無料プランにありません。** 無料枠は Web サービス・静的サイト・
+#   Postgres までです。24時間動かすには onyx-worker を有料プラン（starter）に
+#   する必要があります。ここが唯一の必須課金です。
+#
+# - **無料の Postgres はデータが30日で消えます。** 承認履歴と監査ログが入るので、
+#   試用を超える段階で必ず有料プランへ変更してください。下の onyx-db の plan を
+#   書き換えます。
+#
+# - **Web を無料プランにすると、アクセスが無い間はスリープします。** 朝スマホで
+#   開いたときの初回表示が数十秒かかります。承認が遅れて困るなら starter に。
+#   ワーカーは別サービスなので、Web が寝ていても AI社員は動きます。
+#
+# - **認証がまだ実装されていません。** URL を知っていれば誰でも承認ボタンを
+#   押せます。公開前に必ずログインを実装してください。
+
+databases:
+  - name: onyx-db
+    databaseName: onyx
+    user: onyx
+    # ⚠️ free は30日でデータごと削除されます。本番では変更してください。
+    plan: free
+    region: singapore # 日本から一番近い。oregon / frankfurt などに変更可
+
+services:
+  # ---------------------------------------------------------------- ダッシュボード
+  - type: web
+    name: onyx-web
+    runtime: node
+    region: singapore
+    plan: free # スリープを避けるなら starter
+    branch: main
+    # NODE_ENV=production だと npm が devDependencies を省くため明示する。
+    # tailwindcss と typescript が無いと next build が落ちる。
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start
+    # DB が空でもセットアップ案内を 200 で返すので、ヘルスチェックに使える
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: onyx-db
+          property: connectionString
+      # 共通の設定はグループにまとめ、ワーカーと同じ値を使う
+      - fromGroup: onyx-secrets
+
+  # ------------------------------------------------------------------ ワーカー
+  # 毎分 tick を呼び、cron に該当するジョブだけ実行する。
+  # 「寝ていても自動で」を成立させているのはこのサービス。
+  - type: worker
+    name: onyx-worker
+    runtime: node
+    region: singapore
+    # ⚠️ ワーカーに無料プランはありません
+    plan: starter
+    branch: main
+    # ワーカーは Next のビルド成果物を使わないので、依存の取得だけでよい
+    buildCommand: npm ci
+    startCommand: npm run worker
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: onyx-db
+          property: connectionString
+      - fromGroup: onyx-secrets
+
+# --------------------------------------------------------------- 環境変数
+# sync: false の項目は render.yaml に値を書かず、ダッシュボードで入力します。
+# 認証情報をリポジトリに入れないための指定です。
+envVarGroups:
+  - name: onyx-secrets
+    envVars:
+      # --- 必須 ---
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # --- 任意: Google（未設定ならモックで動作）---
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+
+      # --- 任意: Instagram（未設定ならモックで動作）---
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: INSTAGRAM_IG_USER_ID
+        sync: false
+
+      # --- 運用 ---
+      - key: ONYX_OPERATOR_NAME
+        value: 店長
+      - key: TZ
+        value: Asia/Tokyo

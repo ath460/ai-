@@ -11,6 +11,22 @@ import { toPositionalPlaceholders, type DbDriver } from "./driver.ts";
  * プーラー付きの接続文字列（Neon / Supabase の pgbouncer エンドポイント）を使うこと。
  * ここでの max は「1プロセスあたり」の上限で、プロセス数までは制御できない。
  */
+/**
+ * TLS の扱い。
+ *
+ * 3通りある:
+ *   1. PGSSL=disable      → 明示的に無効（ローカル検証用）
+ *   2. 接続文字列に sslmode= がある → そちらに従う（pg が解釈する）
+ *      Render や Neon の内部接続はこの形が多い
+ *   3. それ以外           → TLS を張る。マネージドPostgresは概ね必須で、
+ *                            証明書はプロバイダ発行のため検証は緩める
+ */
+function sslOption(url: string): pg.PoolConfig["ssl"] {
+  if (process.env.PGSSL === "disable") return false;
+  if (/[?&]sslmode=/i.test(url)) return undefined;
+  return { rejectUnauthorized: false };
+}
+
 export function createPostgresDriver(connectionString?: string): DbDriver {
   const url = connectionString ?? process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL が設定されていません。");
@@ -21,8 +37,7 @@ export function createPostgresDriver(connectionString?: string): DbDriver {
     max: Number(process.env.PGPOOL_MAX ?? 5),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
-    // マネージドPostgresは概ねTLS必須。ローカル検証時だけ無効化できるようにする。
-    ssl: process.env.PGSSL === "disable" ? undefined : { rejectUnauthorized: false },
+    ssl: sslOption(url),
   });
 
   // プール内の接続が落ちてもプロセスごと落とさない。次の取得で張り直される。

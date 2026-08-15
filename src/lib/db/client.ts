@@ -1,26 +1,34 @@
 import type { DbDriver } from "./driver.ts";
-import { createPostgresDriver } from "./postgres.ts";
 import { schemaSql } from "./schema.ts";
-import { createSqliteDriver } from "./sqlite.ts";
 
 /**
  * DB 接続のシングルトン。
  *
  * DATABASE_URL があれば Postgres、無ければ SQLite。
  * これがそのままデプロイ先の選択になる:
- *   - VPS に1台で載せる      → SQLite（設定不要）
- *   - Vercel / Railway など  → Postgres（ファイルシステムが永続しないため）
+ *   - VPS に1台で載せる           → SQLite（設定不要）
+ *   - Render / Railway / Vercel  → Postgres（ファイルシステムが永続しないため）
+ *
+ * ドライバは動的に読み込む。static import にすると、Postgres だけを使う環境でも
+ * sqlite.ts の `node:sqlite` が評価され、その API を持たない Node（22.5未満）や
+ * ランタイムで起動時に落ちる。使う側だけを読み込めばその依存は発生しない。
  */
 
 let driverPromise: Promise<DbDriver> | null = null;
 
-function createDriver(): DbDriver {
-  return process.env.DATABASE_URL ? createPostgresDriver() : createSqliteDriver();
+async function createDriver(): Promise<DbDriver> {
+  if (process.env.DATABASE_URL) {
+    const { createPostgresDriver } = await import("./postgres.ts");
+    return createPostgresDriver();
+  }
+  const { createSqliteDriver } = await import("./sqlite.ts");
+  return createSqliteDriver();
 }
 
 async function initialize(): Promise<DbDriver> {
-  const driver = createDriver();
+  const driver = await createDriver();
   // CREATE TABLE IF NOT EXISTS だけなので、毎起動流しても安全。
+  // デプロイ先で別途マイグレーションを走らせなくても、最初のアクセスで整う。
   await driver.exec(schemaSql(driver.dialect));
   return driver;
 }
