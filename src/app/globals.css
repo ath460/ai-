@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/*
+ * ONYX のブランド（黒×金）に合わせたトークン。
+ * Web フォントは読み込まない。iPhone の Hiragino Sans をそのまま使うほうが、
+ * 電波の弱い店内でも文字が即座に出る。
+ */
+@theme {
+  --color-ink: #08080a;
+  --color-stone: #0f0f12;
+  --color-stone-2: #15151a;
+  --color-gold: #c9a227;
+  --color-gold-lt: #f2e3b0;
+  --color-paper: #f2f0eb;
+  --color-ash: #9c9ca6;
+  --color-ash-2: #dcdad4;
+  --color-text-hi: #ffffff;
+  --color-text-body: #e4e2dc;
+  --color-text-mute: #b4b2ac;
+  --color-err: #e0705a;
+  --color-ok: #7fc49a;
+  --color-edge: rgba(201, 162, 39, 0.2);
+
+  --font-sans:
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+}
+
+html {
+  background: var(--color-ink);
+  /* iOS でセーフエリアを塗り残さない */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-text-body);
+  font-family: var(--font-sans);
+  line-height: 1.75;
+  letter-spacing: 0.012em;
+  /* 下部タブバーの高さ + ホームインジケータ分 */
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  overscroll-behavior-y: none;
+}
+
+::selection {
+  background: var(--color-gold);
+  color: var(--color-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-gold-lt);
+  outline-offset: 3px;
+}
+
+/* サイト側と揃えた金の罫。区切りに使う。 */
+.strata {
+  height: 9px;
+  background:
+    linear-gradient(var(--color-gold), var(--color-gold)) 0 0 / 100% 1.5px no-repeat,
+    linear-gradient(rgba(201, 162, 39, 0.42), rgba(201, 162, 39, 0.42)) 0 4px / 100% 1px no-repeat,
+    linear-gradient(rgba(201, 162, 39, 0.55), rgba(201, 162, 39, 0.55)) 0 7px / 100% 2px no-repeat;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  color: var(--color-gold);
+  text-transform: uppercase;
+}
