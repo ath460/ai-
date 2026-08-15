@@ -2,7 +2,7 @@ import { tick } from "../src/lib/scheduler/tick.ts";
 import { closeDb } from "../src/lib/db/client.ts";
 
 /**
- * 常駐ワーカー（ローカル / VPS 用）。
+ * 常駐ワーカー（Render の worker サービス / VPS の systemd / ローカル）。
  *
  * 毎分 tick を呼ぶだけ。Vercel にデプロイする場合はこのプロセスは不要で、
  * vercel.json の cron から /api/cron/tick を叩けば同じことが起きる。

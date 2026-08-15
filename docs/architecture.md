@@ -87,7 +87,7 @@ AI社員エンジンは `ConnectorBundle` インターフェースにしか依�
 ## 6. DB は SQLite と Postgres の両対応。切り替えは環境変数1つ
 
 `DATABASE_URL` があれば Postgres、無ければ SQLite。判定は `client.ts` の1行だけ。
-これがそのままデプロイ先の選択になる（VPS 1台なら SQLite、Vercel なら Postgres）。
+これがそのままデプロイ先の選択になる（Render なら Postgres、VPS 1台なら SQLite）。
 
 SQLite 側は Node 22 同梱の `node:sqlite` を使っている。ネイティブビルドが要らず
 `npm install` だけで動くので、手元で詰まる箇所が減る。

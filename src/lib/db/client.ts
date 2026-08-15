@@ -6,8 +6,8 @@ import { schemaSql } from "./schema.ts";
  *
  * DATABASE_URL があれば Postgres、無ければ SQLite。
  * これがそのままデプロイ先の選択になる:
- *   - VPS に1台で載せる           → SQLite（設定不要）
  *   - Render / Railway / Vercel  → Postgres（ファイルシステムが永続しないため）
+ *   - VPS に1台で載せる           → SQLite（設定不要）
  *
  * ドライバは動的に読み込む。static import にすると、Postgres だけを使う環境でも
  * sqlite.ts の `node:sqlite` が評価され、その API を持たない Node（22.5未満）や

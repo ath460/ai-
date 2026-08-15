@@ -135,22 +135,30 @@ AI社員エンジン側の変更は不要です。SNS はプラットフォー�
 
 ### 24時間動かす（デプロイ）
 
-**推奨は VPS 1台**です。いまの構成が無改造でそのまま動きます。
-月600〜900円の最小プランで足ります（負荷はほぼ AI 呼び出しの待ち時間）。
+**推奨は Render** です。`render.yaml` を同梱してあるので、Blueprint でリポジトリを指すだけで
+Web・ワーカー・Postgres の3つが立ち上がります。マルチテナントなので、**クライアント店舗が
+何件増えてもデプロイは1つのまま**です。
 
 DB は `DATABASE_URL` の有無で切り替わります。**コードの変更は要りません。**
 
 | 環境 | DB | 設定 |
 |---|---|---|
+| **Render（推奨）** | Postgres | **`render.yaml` 同梱。Blueprint を指すだけ** |
 | VPS 1台 | SQLite | `DATABASE_URL` 未設定のまま |
-| **Render** | Postgres | **`render.yaml` 同梱。Blueprint を指すだけ** |
 | Vercel | Postgres 必須 | `DATABASE_URL` + `CRON_SECRET` |
+
+Render で押さえておくこと: **ワーカーに無料プランはありません**（唯一の必須課金）。
+**無料 Postgres は30日でデータが消える**ので、Apply 後に有料プランへ変更してください。
+Web は無料のままで構いません（スリープしてもワーカーは別サービスなので稼働は止まりません）。
+
+**VPS 1台**は、自分の1店舗だけを回す場合の選択肢です。SQLite のまま無改造で載り、
+月600〜900円で済みます。ただしサーバー管理は自分で持つことになります。
 
 Vercel は**常駐ワーカーを置けない**ため `vercel.json` の Cron 経由になります。
 Cron の最短実行間隔と関数の最大実行時間はプランで変わるので、事前に確認してください。
 **本番では `CRON_SECRET` を必ず設定してください**（未設定だと本番では 401 を返します）。
 
-systemd の設定、HTTPS と認証、バックアップ、**費用の見積もり**は
+Render の手順、systemd の設定、HTTPS と認証、バックアップ、**費用の見積もり**は
 [docs/deploy.md](docs/deploy.md) にまとめています。
 
 ---
@@ -173,7 +181,7 @@ src/
     scheduler/            cron 評価（タイムゾーン対応）と tick
   app/                    スマホ専用 UI（Next.js App Router）
   components/
-worker/index.ts           常駐ワーカー（ローカル / VPS 用）
+worker/index.ts           常駐ワーカー（Render / VPS / ローカル）
 scripts/                  migrate / seed / tick
 ```
 
